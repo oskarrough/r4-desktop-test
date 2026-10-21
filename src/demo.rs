@@ -23,8 +23,15 @@ pub fn from_env() -> Option<Demo> {
     let channel = |slug: &str, name: &str| Channel {
         slug: slug.into(),
         name: name.into(),
-        // Radio Oskar's real avatar, the one thing the demo fetches.
-        image: (slug == "oskar").then(|| "drz0qs9lgscyfdztr17t".into()),
+        // Real avatars, the one thing the demo fetches; the rest show their initial.
+        image: match slug {
+            "oskar" => Some("drz0qs9lgscyfdztr17t".into()),
+            "wavs" => Some("q61pwrzvv7ty4crgqx2v".into()),
+            "comballar" => Some("fewgs95wbzzk4kwhxt02".into()),
+            "ko002" => Some("afeerseziomykfzwtr9e".into()),
+            "belleville" => Some("fp4diwnoof0f8g4rllpb".into()),
+            _ => None,
+        },
         latest_track_at: None,
         track_count: None,
     };

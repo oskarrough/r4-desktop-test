@@ -636,7 +636,16 @@ fn channel_list(
     rows(ui, list.len(), None, None, |ui, i| {
         let c = &list[i];
         let selected = open == Some(c.slug.as_str());
-        if row(ui, &c.name, selected, playing == Some(&c.slug), opens).clicked() {
+        if row(
+            ui,
+            &c.name,
+            Some(c.image.as_deref()),
+            selected,
+            playing == Some(&c.slug),
+            opens,
+        )
+        .clicked()
+        {
             actions.push(Action::Open(c.slug.clone(), c.name.clone()));
         }
     });
@@ -670,7 +679,7 @@ fn tracklist(
         Some(Ok(list)) => {
             let current = s.index.filter(|_| s.queue.as_deref() == Some(&open.slug));
             rows(ui, list.len(), current, Some(scroll), |ui, i| {
-                if row(ui, title(&list[i]), false, current == Some(i), false).clicked() {
+                if row(ui, title(&list[i]), None, false, current == Some(i), false).clicked() {
                     actions.push(Action::Play(i));
                 }
             });
@@ -768,15 +777,9 @@ fn pill(ui: &mut Ui, c: Pos2, title: &str, image: Option<&str>, max: f32) {
         egui::Stroke::new(1.0, EDGE),
         egui::StrokeKind::Inside,
     );
-    if let Some(id) = image {
+    if image.is_some() {
         let at = Rect::from_min_size(pos2(left + UNIT, c.y - AVATAR / 2.0), vec2(AVATAR, AVATAR));
-        ui.painter()
-            .circle_filled(at.center(), AVATAR / 2.0, HAIRLINE);
-        let px = (AVATAR * ui.pixels_per_point()).round() as u32;
-        egui::Image::new(channels::avatar_url(id, px))
-            .corner_radius(AVATAR / 2.0)
-            .show_loading_spinner(false)
-            .paint_at(ui, at);
+        face(ui, at, image, title);
     }
     put(ui, g, left + lead, c.y);
 }
@@ -846,7 +849,15 @@ fn speaker(ui: &mut Ui, view: Rect, s: &State, volume: Option<Volume>, actions: 
 }
 
 /// One row of a list: the name at the margin, then a playing dot or, for rows that open something, a chevron.
-fn row(ui: &mut Ui, label: &str, selected: bool, playing: bool, opens: bool) -> Response {
+/// `avatar` gives the row an avatar slot at the margin: the channel's image, or its initial when it has none.
+fn row(
+    ui: &mut Ui,
+    label: &str,
+    avatar: Option<Option<&str>>,
+    selected: bool,
+    playing: bool,
+    opens: bool,
+) -> Response {
     let (rect, r) = ui.allocate_exact_size(vec2(ui.available_width(), ROW), Sense::click());
     if !ui.is_rect_visible(rect) {
         return r;
@@ -870,7 +881,12 @@ fn row(ui: &mut Ui, label: &str, selected: bool, playing: bool, opens: bool) -> 
         chevron(ui, pos2(right, cy), 1.0, 4.0, DISABLED);
         right -= 4.0 + 2.0 * UNIT;
     }
-    let x = rect.left() + MARGIN;
+    let mut x = rect.left() + MARGIN;
+    if let Some(image) = avatar {
+        let at = Rect::from_min_size(pos2(x, cy - AVATAR / 2.0), vec2(AVATAR, AVATAR));
+        face(ui, at, image, label);
+        x += AVATAR + 2.0 * UNIT;
+    }
     put(
         ui,
         fit(ui, label, font(BODY, Weight::Regular), TEXT, right - x),
@@ -878,6 +894,33 @@ fn row(ui: &mut Ui, label: &str, selected: bool, playing: bool, opens: bool) -> 
         cy,
     );
     r
+}
+
+/// A channel's avatar in a circle, or its first letter while there's no picture.
+fn face(ui: &Ui, at: Rect, image: Option<&str>, name: &str) {
+    let r = at.width() / 2.0;
+    ui.painter().circle_filled(at.center(), r, SURFACE);
+    let initial: String = name.chars().take(1).flat_map(char::to_uppercase).collect();
+    let g = fit(
+        ui,
+        &initial,
+        font(SMALL, Weight::SemiBold),
+        SECONDARY,
+        at.width(),
+    );
+    put(
+        ui,
+        g.clone(),
+        at.center().x - ink_width(&g) / 2.0,
+        at.center().y,
+    );
+    if let Some(id) = image {
+        let px = (at.width() * ui.pixels_per_point()).round() as u32;
+        egui::Image::new(channels::avatar_url(id, px))
+            .corner_radius(r)
+            .show_loading_spinner(false)
+            .paint_at(ui, at);
+    }
 }
 
 /// A list of `n` rows below the top band, drawing only the visible ones. With a `scroll`, it brings `target` to
