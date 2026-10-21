@@ -9,19 +9,17 @@ mkdir -p "$stage/AppDir/usr/bin" "$stage/downloads"
 curl -fsSL -o "$stage/downloads/linuxdeploy" \
     https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
 chmod +x "$stage/downloads/linuxdeploy"
-APPIMAGE_EXTRACT_AND_RUN=1 "$stage/downloads/linuxdeploy" \
-    --appdir "$stage/AppDir" --executable "$root/target/release/radio4000" \
+(cd "$stage/downloads" && ./linuxdeploy --appimage-extract >/dev/null)
+linuxdeploy="$stage/downloads/squashfs-root"
+"$linuxdeploy/AppRun" --appdir "$stage/AppDir" --executable "$root/target/release/radio4000" \
     --desktop-file "$root/assets/radio4000.desktop" --icon-file "$root/assets/radio4000.svg"
 # AppImages deliberately use the host's desktop/driver libraries. Record exactly those packages
 # for the clean-container smoke test, without accidentally installing a missing libmpv there.
 if command -v dpkg-query >/dev/null; then
-    : >"$stage/system-packages.txt"
-    while IFS= read -r library; do
-        case "$library" in "$stage"/*) continue ;; esac
-        owner=$(dpkg-query -S "$library" 2>/dev/null || dpkg-query -S "$(readlink -f "$library")")
-        printf '%s\n' "$owner" | head -1 | cut -d: -f1 >>"$stage/system-packages.txt"
-    done < <(ldd "$stage/AppDir/usr/bin/radio4000" | awk '$2 == "=>" && $3 ~ /^\\// {print $3}')
-    sort -u -o "$stage/system-packages.txt" "$stage/system-packages.txt"
+    # One dpkg-query for every library: each call reads the whole file database.
+    ldd "$stage/AppDir/usr/bin/radio4000" | awk '$2 == "=>" && $3 ~ /^\// {print $3}' |
+        grep -v "^$stage/" | xargs -r readlink -f | xargs -r dpkg-query -S 2>/dev/null |
+        cut -d: -f1 | sort -u >"$stage/system-packages.txt" || true
     if grep -Eq 'mpv|yt-dlp|python' "$stage/system-packages.txt"; then
         echo 'Playback dependencies escaped the bundle' >&2
         exit 1
@@ -30,19 +28,21 @@ fi
 # Keep the distro's notices for every bundled shared library, including mpv and FFmpeg.
 licenses="$stage/AppDir/usr/share/doc/radio4000"
 mkdir -p "$licenses"
-while IFS= read -r library; do
-    package=$(dpkg-query -S "*/$(basename "$library")" 2>/dev/null | head -1 | cut -d: -f1 || true)
-    if [[ -n "$package" && -f "/usr/share/doc/$package/copyright" ]]; then
+packages=$(find "$stage/AppDir/usr/lib" -type f -name '*.so*' -printf '*/%f\n' |
+    xargs -r dpkg-query -S 2>/dev/null | cut -d: -f1 | sort -u || true)
+for package in $packages; do
+    if [[ -f "/usr/share/doc/$package/copyright" ]]; then
         cp "/usr/share/doc/$package/copyright" "$licenses/$package.txt"
         dpkg-query -W -f='${binary:Package} ${Version}\n' "$package" >>"$licenses/packages.txt"
         dpkg-query -W -f='https://launchpad.net/ubuntu/+source/${source:Package}/${source:Version}\n' "$package" >>"$licenses/sources.txt"
     fi
-done < <(find "$stage/AppDir/usr/lib" -type f -name '*.so*')
+done
 if [[ -f "$licenses/sources.txt" ]]; then sort -u -o "$licenses/sources.txt" "$licenses/sources.txt"; fi
 (
     cd "$stage"
-    OUTPUT="$root/target/radio4000-x86_64.AppImage" APPIMAGE_EXTRACT_AND_RUN=1 \
-        "$stage/downloads/linuxdeploy" --appdir "$stage/AppDir" --output appimage
+    # The libraries are already deployed; only squash the AppDir into the AppImage.
+    ARCH=x86_64 OUTPUT="$root/target/radio4000-x86_64.AppImage" \
+        "$linuxdeploy/usr/bin/linuxdeploy-plugin-appimage" --appdir "$stage/AppDir"
 )
 # Preserve the installer's existing archive name. The direct AppImage is published too.
 mkdir -p "$stage/archive"

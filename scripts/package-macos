@@ -34,9 +34,11 @@ for library in "$app/Contents/Frameworks/"*.dylib; do
 done
 mkdir -p "$app/Contents/Resources/licenses"
 # Homebrew keeps the licenses with each library's keg, not the linked dylib.
+# One walk of the Cellar; searching it per library took over a minute.
+dylibs=$(find "$(brew --cellar)" -name '*.dylib' -type f)
 for library in "$app/Contents/Frameworks/"*.dylib; do
     name=$(basename "$library")
-    original=$(find "$(brew --cellar)" -name "$name" -type f -print -quit)
+    original=$(grep -m1 "/$name\$" <<<"$dylibs" || true)
     if [[ -n "$original" ]]; then
         keg=${original%%/lib/*}
         find "$keg" -maxdepth 1 -type f \( -iname '*license*' -o -iname '*copying*' \) \
