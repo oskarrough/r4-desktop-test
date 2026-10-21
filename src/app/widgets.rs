@@ -115,7 +115,8 @@ pub(super) fn arc(ui: &Ui, c: Pos2, radius: f32, frac: f32, stroke: egui::Stroke
 /// What floats over the top of a list: a fade, back and search buttons,
 /// and the title in a pill with the channel's avatar, which opens the channel's details.
 /// `back` is how far the channel has slid over the channel list, when it does: the buttons hold still meanwhile,
-/// search glides aside, back shows in the room it leaves, then the title drifts in; leaving runs it in reverse.
+/// back shows, then the title drifts in; leaving runs it in reverse. Back leads and search trails, as on the overview,
+/// so the title sits centred between them.
 pub(super) fn chrome(
     ui: &mut Ui,
     rect: Rect,
@@ -135,17 +136,12 @@ pub(super) fn chrome(
         let side = 2.0 * UNIT + KNOB / 2.0;
         let cy = rect.top() + side;
         let home = rect.left() + side;
-        let room = if back_button.is_some() {
-            KNOB + UNIT
-        } else {
-            0.0
-        };
         if back_button.is_some() {
             faded(ui, stage(shown, 0.15, 0.75), |ui| {
                 back(ui, pos2(home, cy), actions)
             });
         }
-        let c = pos2(home + snap(ui, vec2(shown * room, 0.0)).x, cy);
+        let c = pos2(rect.right() - side, cy);
         let pal = palette(ui);
         let search = knob(ui, c, "search");
         Icon::Search
@@ -154,8 +150,8 @@ pub(super) fn chrome(
         if search.on_hover_text("Search tracks (/)").clicked() {
             actions.push(Action::Search(SearchTarget::Tracks(open.clone())));
         }
-        let left = home + room + KNOB / 2.0 + 2.0 * UNIT;
-        let right = rect.right() - 2.0 * UNIT;
+        let left = home + KNOB / 2.0 + 2.0 * UNIT;
+        let right = c.x - KNOB / 2.0 - 2.0 * UNIT;
         let arrived = stage(shown, 0.35, 1.0);
         let drift = snap(ui, vec2((1.0 - arrived) * 4.0 * UNIT, 0.0)).x;
         let r = faded(ui, arrived, |ui| {

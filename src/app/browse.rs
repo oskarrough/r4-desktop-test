@@ -73,7 +73,7 @@ pub(super) fn channel_list(
         return;
     }
     let side = 2.0 * UNIT + KNOB / 2.0;
-    let c = pos2(rect.left() + side, rect.top() + side);
+    let c = pos2(rect.right() - side, rect.top() + side);
     let r = knob(ui, c, "search");
     let pal = palette(ui);
     Icon::Search

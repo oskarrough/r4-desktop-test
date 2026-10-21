@@ -5,6 +5,8 @@ use std::time::{Duration, Instant};
 
 /// How long a view takes to slide over the one under it, or back off it.
 const SLIDE: Duration = Duration::from_millis(280);
+/// Every slide eases out on this power, steeper than `ease`, like iOS: nearly there at once, then a long settle.
+const STEEP: i32 = 5;
 
 #[derive(Clone)]
 pub(super) struct ChannelRef {
@@ -101,7 +103,7 @@ impl Slide {
     /// Turning back halfway picks up from where the view is, rather than jumping to an end.
     fn start(over: bool, running: Option<Slide>) -> Self {
         let from = running.map_or(if over { 0.0 } else { 1.0 }, |s| s.shown());
-        let t = 1.0 - (1.0 - if over { from } else { 1.0 - from }).cbrt();
+        let t = 1.0 - (1.0 - if over { from } else { 1.0 - from }).powf(1.0 / STEEP as f32);
         Slide {
             at: Instant::now() - SLIDE.mul_f32(t),
             over,
@@ -110,7 +112,8 @@ impl Slide {
 
     /// How much of the view on top is in, from 0 to 1.
     pub(super) fn shown(&self) -> f32 {
-        let e = ease(self.at.elapsed().as_secs_f32() / SLIDE.as_secs_f32());
+        let t = (self.at.elapsed().as_secs_f32() / SLIDE.as_secs_f32()).clamp(0.0, 1.0);
+        let e = 1.0 - (1.0 - t).powi(STEEP);
         if self.over { e } else { 1.0 - e }
     }
 
