@@ -23,6 +23,8 @@ pub fn from_env() -> Option<Demo> {
     let channel = |slug: &str, name: &str| Channel {
         slug: slug.into(),
         name: name.into(),
+        // Radio Oskar's real avatar, the one thing the demo fetches.
+        image: (slug == "oskar").then(|| "drz0qs9lgscyfdztr17t".into()),
         latest_track_at: None,
         track_count: None,
     };
@@ -74,6 +76,21 @@ pub fn from_env() -> Option<Demo> {
             track("Ali Farka Touré & Toumani Diabaté – Ruby"),
             track("Stereolab – French Disko"),
             track("Ebo Taylor – Love and Death"),
+            track("Can – Vitamin C"),
+            track("Nina Simone – Feeling Good"),
+            track("William Onyeabor – Fantastic Man"),
+            track("Cocteau Twins – Heaven or Las Vegas"),
+            track("Fela Kuti – Water No Get Enemy"),
+            track("Hailu Mergia – Hari Meru Mela"),
+            track("Joni Mitchell – Coyote"),
+            track("Talking Heads – Once in a Lifetime"),
+            track("Gal Costa – Pérola Negra"),
+            track("Harold Budd – Afar"),
+            track("Orchestra Baobab – Utrus Horas"),
+            track("Sade – Cherish the Day"),
+            track("Haruomi Hosono – Sports Men"),
+            track("Bill Withers – Ain't No Sunshine"),
+            track("Penguin Cafe Orchestra – Music for a Found Harmonium"),
         ],
         state: if view == "idle" {
             State::default()

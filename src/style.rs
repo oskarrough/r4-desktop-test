@@ -28,8 +28,11 @@ pub const SELECTED: Color32 = Color32::from_rgb(0x26, 0x26, 0x24);
 pub const TEXT: Color32 = Color32::from_rgb(0xed, 0xed, 0xeb);
 pub const SECONDARY: Color32 = Color32::from_rgb(0x8c, 0x8c, 0x88);
 pub const DISABLED: Color32 = Color32::from_rgb(0x4a, 0x4a, 0x47);
-/// Only for what is live: progress, the playing dot, the channel link.
-pub const ACCENT: Color32 = Color32::from_rgb(0xff, 0x5a, 0x1f);
+/// What floats: round buttons and the title pill, and their edge.
+pub const SURFACE: Color32 = Color32::from_rgb(0x1e, 0x1e, 0x1d);
+pub const EDGE: Color32 = Color32::from_rgb(0x2e, 0x2e, 0x2c);
+/// Only for what is live: progress, the playing dot, the channel link. Monochrome for now; a colour is one line away.
+pub const ACCENT: Color32 = TEXT;
 
 #[allow(dead_code)]
 enum Typeface {

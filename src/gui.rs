@@ -18,8 +18,13 @@ use std::time::{Duration, Instant};
 const WIDE: f32 = 560.0;
 /// A list row.
 const ROW: f32 = 8.0 * UNIT;
-/// The bar along the top of a view: back, title, what's playing.
-const HEADER: f32 = 10.0 * UNIT;
+/// The band at the top that the round buttons and the title pill float in; lists start below it and scroll under it.
+const TOP: f32 = 12.0 * UNIT;
+/// A round button, and the height of the title pill.
+const KNOB: f32 = 8.0 * UNIT;
+const AVATAR: f32 = 6.0 * UNIT;
+/// How long the tracklist takes to glide to the playing track.
+const GLIDE: Duration = Duration::from_millis(240);
 /// The transport along the bottom, its progress line included.
 const BAR: f32 = 14.0 * UNIT;
 /// How long the volume meter stays up after a change, and how long it then takes to fade.
@@ -81,7 +86,7 @@ pub fn run() -> eframe::Result {
                 player: Player::spawn(&[], move || ctx.request_repaint()),
                 scrub: None,
                 volume: None,
-                reveal: false,
+                scroll: Scroll::default(),
                 actions: Vec::new(),
                 demo: demo.is_some(),
             };
@@ -102,7 +107,7 @@ pub fn run() -> eframe::Result {
                 app.player.state = d.state;
                 app.open = d.open.then_some(open);
                 app.now = d.now;
-                app.reveal = true;
+                app.scroll.reveal = Some(Reveal::Jump);
                 if d.volume {
                     app.volume = Some(Volume {
                         to: app.player.state.volume,
@@ -128,8 +133,7 @@ struct App {
     scrub: Option<Scrub>,
     /// The volume last asked for, shown on the meter until it fades.
     volume: Option<Volume>,
-    /// Scroll the playing track into view on the next frame.
-    reveal: bool,
+    scroll: Scroll,
     actions: Vec<Action>,
     /// Showing the demo: the player's state stays as the demo set it.
     demo: bool,
@@ -149,6 +153,29 @@ struct Tracks {
 struct Scrub {
     to: f64,
     dragging: bool,
+    at: Instant,
+}
+
+/// How the tracklist brings the playing track to its middle: jumping there when a channel opens,
+/// gliding there when the track changes, so you see where it went.
+#[derive(Default)]
+struct Scroll {
+    reveal: Option<Reveal>,
+    glide: Option<Glide>,
+    /// Where the list was drawn last frame.
+    offset: f32,
+}
+
+#[derive(Clone, Copy)]
+enum Reveal {
+    Jump,
+    Glide,
+}
+
+#[derive(Clone, Copy)]
+struct Glide {
+    from: f32,
+    to: f32,
     at: Instant,
 }
 
@@ -200,7 +227,11 @@ impl eframe::App for App {
         }
         if self.now {
             egui::CentralPanel::no_frame().frame(flat).show(ui, |ui| {
-                now_playing(ui, state, &mut self.scrub, self.volume, actions);
+                let image = state
+                    .queue
+                    .as_deref()
+                    .and_then(|q| avatar(&self.channels, q));
+                now_playing(ui, state, image, &mut self.scrub, self.volume, actions);
             });
         } else if wide {
             let open = self.open.as_ref().map(|o| o.slug.as_str());
@@ -209,30 +240,49 @@ impl eframe::App for App {
                 .resizable(true)
                 .default_size(240.0)
                 .show(ui, |ui| {
-                    header(ui, "Radio4000", false, None, actions);
+                    let rect = ui.max_rect();
                     channel_list(ui, &self.channels, open, playing, false, actions);
+                    chrome(ui, rect, "Radio4000", None, false, actions);
                 });
             egui::CentralPanel::no_frame()
                 .frame(flat)
                 .show(ui, |ui| match &self.open {
                     Some(o) => {
-                        tracklist(ui, o, &self.tracks, state, false, &mut self.reveal, actions)
+                        let image = avatar(&self.channels, &o.slug);
+                        tracklist(
+                            ui,
+                            o,
+                            image,
+                            &self.tracks,
+                            state,
+                            false,
+                            &mut self.scroll,
+                            actions,
+                        )
                     }
-                    None => {
-                        header(ui, "", false, Some(state), actions);
-                        note(ui, "Pick a channel.");
-                    }
+                    None => note(ui, "Pick a channel."),
                 });
         } else {
             egui::CentralPanel::no_frame()
                 .frame(flat)
                 .show(ui, |ui| match &self.open {
                     Some(o) => {
-                        tracklist(ui, o, &self.tracks, state, true, &mut self.reveal, actions)
+                        let image = avatar(&self.channels, &o.slug);
+                        tracklist(
+                            ui,
+                            o,
+                            image,
+                            &self.tracks,
+                            state,
+                            true,
+                            &mut self.scroll,
+                            actions,
+                        )
                     }
                     None => {
-                        header(ui, "Radio4000", false, Some(state), actions);
+                        let rect = ui.max_rect();
                         channel_list(ui, &self.channels, None, playing, true, actions);
+                        chrome(ui, rect, "Radio4000", None, false, actions);
                     }
                 });
         }
@@ -259,7 +309,7 @@ impl App {
         }
         let s = &self.player.state;
         if s.index.is_some() && (s.queue.clone(), s.index) != before {
-            self.reveal = true;
+            self.scroll.reveal = Some(Reveal::Glide);
         }
         // Let go of a finished scrub once mpv reports the new spot, or gives up on it.
         if let Some(sc) = &self.scrub
@@ -307,7 +357,8 @@ impl App {
                 self.tracks
                     .entry(slug.clone())
                     .or_insert_with(|| Tracks::fetch(ctx, &slug));
-                self.reveal = self.player.state.queue.as_deref() == Some(&slug);
+                self.scroll.reveal =
+                    (self.player.state.queue.as_deref() == Some(&slug)).then_some(Reveal::Jump);
                 self.open = Some(Open { slug, name });
                 self.now = false;
             }
@@ -342,12 +393,27 @@ impl App {
                     self.player.state.muted = !self.player.state.muted;
                 }
             }
+            Action::Send(c) if self.demo => {
+                let by = match c {
+                    Command::Next => 1,
+                    Command::Prev => -1,
+                    _ => return,
+                };
+                let i = self.player.state.index.unwrap_or(0) as isize + by;
+                self.play(i.max(0) as usize);
+            }
             Action::Send(c) => self.player.send(c),
         }
     }
 
     fn play(&mut self, index: usize) {
         let Some(open) = &self.open else { return };
+        // The demo's player stands still, so follow the tap by hand.
+        if self.demo {
+            self.player.state.index = Some(index);
+            self.scroll.reveal = Some(Reveal::Glide);
+            return;
+        }
         let Some(Ok(list)) = self.tracks.get(&open.slug).and_then(|t| t.list.as_ref()) else {
             return;
         };
@@ -450,26 +516,56 @@ fn transport(ui: &mut Ui, s: &State, scrub: &mut Option<Scrub>, actions: &mut Ve
 fn now_playing(
     ui: &mut Ui,
     s: &State,
+    image: Option<&str>,
     scrub: &mut Option<Scrub>,
     volume: Option<Volume>,
     actions: &mut Vec<Action>,
 ) {
-    let top = header(ui, "Now playing", true, None, actions);
-    speaker(ui, top, s, volume, actions);
-    let area = ui.available_rect_before_wrap();
+    let rect = ui.max_rect();
+    let cy = rect.top() + 2.0 * UNIT + KNOB / 2.0;
+    back(ui, pos2(rect.left() + 2.0 * UNIT + KNOB / 2.0, cy), actions);
+    speaker(ui, rect, s, volume, actions);
+    let area = Rect::from_x_y_ranges(rect.x_range(), rect.top() + TOP..=rect.bottom());
     let x = area.left() + MARGIN;
     let width = area.width() - 2.0 * MARGIN;
 
-    let mut job = LayoutJob::simple(s.title.clone(), font(LARGE, Weight::SemiBold), TEXT, width);
-    job.wrap.max_rows = 2;
-    let title = ui.painter().layout_job(job);
     let channel = fit(ui, &s.channel, font(BODY, Weight::Regular), ACCENT, width);
     let big = 2.0 * ICON;
     // Each step below is a gap on the grid, from the title's top to the buttons' bottom.
-    let height =
-        title.size().y + UNIT + channel.size().y + 6.0 * UNIT + 8.0 * UNIT + 8.0 * UNIT + big;
-    let mut y = (area.top() + (area.height() - height) / 2.0).max(area.top() + 2.0 * UNIT);
+    let below = UNIT + channel.size().y + 6.0 * UNIT + 8.0 * UNIT + 8.0 * UNIT + big;
+    // The title takes two lines where they fit, one in a small window.
+    let title = |rows| {
+        let mut job =
+            LayoutJob::simple(s.title.clone(), font(LARGE, Weight::SemiBold), TEXT, width);
+        job.wrap.max_rows = rows;
+        ui.painter().layout_job(job)
+    };
+    let mut title = title(2);
+    if title.size().y + below > area.height() {
+        title = self::title_line(ui, &s.title, width);
+    }
+    let height = title.size().y + below;
+    // The channel's avatar as artwork, as large as the room above the group allows, on 16s; none when that's tiny.
+    let gap = 6.0 * UNIT;
+    let room = area.height() - height - 2.0 * gap;
+    let side = (room.min(width).min(60.0 * UNIT) / (4.0 * UNIT)).floor() * 4.0 * UNIT;
+    let art = image.filter(|_| side >= 24.0 * UNIT);
+    let total = height + art.map_or(0.0, |_| side + gap);
+    let mut y = (area.top() + (area.height() - total) / 2.0).max(area.top());
     y = (y / UNIT).round() * UNIT;
+    if let Some(id) = art {
+        let at = Rect::from_min_size(
+            pos2((area.center().x - side / 2.0).round(), y),
+            vec2(side, side),
+        );
+        let px = (side * ui.pixels_per_point()).round() as u32;
+        ui.painter().rect_filled(at, 2.0 * UNIT, SURFACE);
+        egui::Image::new(channels::avatar_url(id, px))
+            .corner_radius(2.0 * UNIT)
+            .show_loading_spinner(false)
+            .paint_at(ui, at);
+        y += side + gap;
+    }
 
     put_top(ui, title.clone(), x, y);
     y += title.size().y + UNIT;
@@ -515,6 +611,10 @@ fn now_playing(
     }
 }
 
+fn title_line(ui: &Ui, title: &str, width: f32) -> Arc<Galley> {
+    fit(ui, title, font(LARGE, Weight::SemiBold), TEXT, width)
+}
+
 /// Where the track is, or where it is being dragged to.
 fn shown(s: &State, scrub: &Option<Scrub>) -> f64 {
     scrub.as_ref().map_or(s.pos, |sc| sc.to)
@@ -533,7 +633,7 @@ fn channel_list(
         Some(Err(e)) => return note(ui, &format!("Could not load channels: {e}")),
         Some(Ok(list)) => list,
     };
-    rows(ui, list.len(), None, |ui, i| {
+    rows(ui, list.len(), None, None, |ui, i| {
         let c = &list[i];
         let selected = open == Some(c.slug.as_str());
         if row(ui, &c.name, selected, playing == Some(&c.slug), opens).clicked() {
@@ -542,119 +642,162 @@ fn channel_list(
     });
 }
 
+/// The channel's avatar id, if it has one.
+fn avatar<'a>(channels: &'a Option<Result<Vec<Channel>, String>>, slug: &str) -> Option<&'a str> {
+    let Some(Ok(list)) = channels else {
+        return None;
+    };
+    list.iter()
+        .find(|c| c.slug == slug)
+        .and_then(|c| c.image.as_deref())
+}
+
+#[allow(clippy::too_many_arguments)]
 fn tracklist(
     ui: &mut Ui,
     open: &Open,
+    image: Option<&str>,
     tracks: &HashMap<String, Tracks>,
     s: &State,
     back: bool,
-    reveal: &mut bool,
+    scroll: &mut Scroll,
     actions: &mut Vec<Action>,
 ) {
-    header(ui, &open.name, back, Some(s), actions);
-    let list = match tracks.get(&open.slug).and_then(|t| t.list.as_ref()) {
-        None => return note(ui, "Loading…"),
-        Some(Err(e)) => return note(ui, &format!("Could not load tracks: {e}")),
-        Some(Ok(list)) => list,
-    };
-    let current = s.index.filter(|_| s.queue.as_deref() == Some(&open.slug));
-    let target = current.filter(|_| std::mem::take(reveal));
-    rows(ui, list.len(), target, |ui, i| {
-        if row(ui, title(&list[i]), false, current == Some(i), false).clicked() {
-            actions.push(Action::Play(i));
+    let rect = ui.max_rect();
+    match tracks.get(&open.slug).and_then(|t| t.list.as_ref()) {
+        None => note(ui, "Loading…"),
+        Some(Err(e)) => note(ui, &format!("Could not load tracks: {e}")),
+        Some(Ok(list)) => {
+            let current = s.index.filter(|_| s.queue.as_deref() == Some(&open.slug));
+            rows(ui, list.len(), current, Some(scroll), |ui, i| {
+                if row(ui, title(&list[i]), false, current == Some(i), false).clicked() {
+                    actions.push(Action::Play(i));
+                }
+            });
         }
-    });
+    }
+    chrome(ui, rect, &open.name, image, back, actions);
 }
 
-/// The bar along the top: a back chevron, the title centred, and what's playing at the right, as on an iPod.
-fn header(
+/// What floats over the top of a list: a fade the rows scroll under, a round back button,
+/// and the title in a pill with the channel's avatar.
+fn chrome(
     ui: &mut Ui,
+    rect: Rect,
     title: &str,
-    back: bool,
-    s: Option<&State>,
+    image: Option<&str>,
+    back_button: bool,
     actions: &mut Vec<Action>,
-) -> Rect {
-    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), HEADER), Sense::hover());
-    let p = ui.painter();
-    p.rect_filled(
-        Rect::from_x_y_ranges(rect.x_range(), rect.bottom() - 1.0..=rect.bottom()),
-        0.0,
-        HAIRLINE,
+) {
+    let band = Rect::from_x_y_ranges(rect.x_range(), rect.top()..=rect.top() + TOP);
+    let mut mesh = egui::Mesh::default();
+    mesh.colored_vertex(band.left_top(), BG);
+    mesh.colored_vertex(band.right_top(), BG);
+    mesh.colored_vertex(band.left_bottom(), Color32::TRANSPARENT);
+    mesh.colored_vertex(band.right_bottom(), Color32::TRANSPARENT);
+    mesh.add_triangle(0, 1, 2);
+    mesh.add_triangle(1, 3, 2);
+    ui.painter().add(mesh);
+
+    let side = 2.0 * UNIT + KNOB / 2.0;
+    let cy = rect.top() + side;
+    if back_button {
+        back(ui, pos2(rect.left() + side, cy), actions);
+    }
+    pill(
+        ui,
+        pos2(rect.center().x, cy),
+        title,
+        image,
+        rect.width() - 4.0 * side,
     );
-    let cy = rect.top() + (HEADER - 1.0) / 2.0;
-    let side = MARGIN + 4.0 * UNIT;
+}
+
+/// A round button that floats over what's under it.
+fn knob(ui: &mut Ui, c: Pos2, id: &str) -> Response {
+    let r = ui.interact(
+        Rect::from_center_size(c, vec2(KNOB, KNOB)),
+        ui.id().with(id),
+        Sense::click(),
+    );
+    let fill = if r.hovered() || r.has_focus() {
+        SELECTED
+    } else {
+        SURFACE
+    };
+    ui.painter()
+        .circle(c, KNOB / 2.0 - 0.5, fill, egui::Stroke::new(1.0, EDGE));
+    r
+}
+
+fn back(ui: &mut Ui, c: Pos2, actions: &mut Vec<Action>) {
+    let r = knob(ui, c, "back");
+    // The chevron's ink is 6.5 wide from its tip; centre that.
+    chevron(ui, pos2(c.x - 3.25, c.y), -1.0, 5.0, TEXT);
+    if r.on_hover_text("Back (esc)").clicked() {
+        actions.push(Action::Back);
+    }
+}
+
+/// The title in a pill centred on `c`, led by the avatar when there is one.
+fn pill(ui: &mut Ui, c: Pos2, title: &str, image: Option<&str>, max: f32) {
+    if title.is_empty() {
+        return;
+    }
+    let lead = if image.is_some() {
+        UNIT + AVATAR + 2.0 * UNIT
+    } else {
+        3.0 * UNIT
+    };
+    let trail = 3.0 * UNIT;
     let g = fit(
         ui,
         title,
         font(BODY, Weight::SemiBold),
         TEXT,
-        rect.width() - 2.0 * side,
+        max - lead - trail,
     );
-    put(ui, g.clone(), rect.center().x - g.size().x / 2.0, cy);
-
-    if back {
-        let hit = Rect::from_x_y_ranges(
-            rect.left()..=rect.left() + side,
-            rect.top()..=rect.bottom() - 1.0,
-        );
-        let r = ui.interact(hit, ui.id().with("back"), Sense::click());
-        chevron(
-            ui,
-            pos2(rect.left() + MARGIN, cy),
-            -1.0,
-            5.0,
-            if r.hovered() { ACCENT } else { TEXT },
-        );
-        if r.on_hover_text("Back (esc)").clicked() {
-            actions.push(Action::Back);
-        }
+    // Whole pixels from the ink's last soft edge, so both sides read the same.
+    let left = (c.x - (lead + ink_width(&g) + trail) / 2.0).round();
+    let width = (left + lead + ink_width(&g)).ceil() + trail - left;
+    let rect = Rect::from_min_size(pos2(left, c.y - KNOB / 2.0), vec2(width, KNOB));
+    ui.painter().rect(
+        rect,
+        KNOB / 2.0,
+        SURFACE,
+        egui::Stroke::new(1.0, EDGE),
+        egui::StrokeKind::Inside,
+    );
+    if let Some(id) = image {
+        let at = Rect::from_min_size(pos2(left + UNIT, c.y - AVATAR / 2.0), vec2(AVATAR, AVATAR));
+        ui.painter()
+            .circle_filled(at.center(), AVATAR / 2.0, HAIRLINE);
+        let px = (AVATAR * ui.pixels_per_point()).round() as u32;
+        egui::Image::new(channels::avatar_url(id, px))
+            .corner_radius(AVATAR / 2.0)
+            .show_loading_spinner(false)
+            .paint_at(ui, at);
     }
-    if let Some(s) = s.filter(|s| s.queue.is_some()) {
-        let icon = if s.paused { Icon::Pause } else { Icon::Play };
-        let size = 12.0;
-        let c = pos2(rect.right() - MARGIN - half(icon, size), cy);
-        let hit = Rect::from_center_size(c, vec2(HIT, HIT));
-        let r = ui.interact(hit, ui.id().with("playing"), Sense::click());
-        icon.image(ACCENT, size)
-            .paint_at(ui, Rect::from_center_size(c, vec2(size, size)));
-        if r.on_hover_text("Now playing").clicked() {
-            actions.push(Action::ShowNow);
-        }
-    }
-    rect
+    put(ui, g, left + lead, c.y);
 }
 
-/// The speaker at the header's right, opposite back: click to mute. Scrolling anywhere on the view, or up and down,
-/// turns the volume like the Watch's crown, and the header's hairline fills to show it, then fades.
-fn speaker(
-    ui: &mut Ui,
-    header: Rect,
-    s: &State,
-    volume: Option<Volume>,
-    actions: &mut Vec<Action>,
-) {
-    let cy = header.top() + (HEADER - 1.0) / 2.0;
-    // Both speakers end at x 23 of their 24-unit box, so the body stays put as the waves turn to a cross;
-    // the box ends at the margin so the stroke's soft edge does too.
-    let right = header.right() - MARGIN;
-    let icon_rect = Rect::from_min_max(
-        pos2(right - ICON, cy - ICON / 2.0),
-        pos2(right, cy + ICON / 2.0),
-    );
-    let hit = Rect::from_center_size(icon_rect.center(), vec2(HIT, HIT));
-    let r = ui.interact(hit, ui.id().with("speaker"), Sense::click());
+/// A round speaker opposite back: click to mute. Scrolling anywhere on the view, or up and down, turns the volume
+/// like the Watch's crown, and the button's rim fills to show it, then fades.
+fn speaker(ui: &mut Ui, view: Rect, s: &State, volume: Option<Volume>, actions: &mut Vec<Action>) {
+    let side = 2.0 * UNIT + KNOB / 2.0;
+    let c = pos2(view.right() - side, view.top() + side);
+    let r = knob(ui, c, "speaker");
     let (icon, tip) = if s.muted {
         (Icon::Muted, "Unmute (m)")
     } else {
         (Icon::Speaker, "Mute (m)")
     };
-    let color = if r.hovered() { ACCENT } else { TEXT };
-    icon.image(color, ICON).paint_at(ui, icon_rect);
+    icon.image(TEXT, ICON)
+        .paint_at(ui, Rect::from_center_size(c, vec2(ICON, ICON)));
     if r.on_hover_text(tip).clicked() {
         actions.push(Action::ToggleMute);
     }
 
-    let view = header.union(ui.available_rect_before_wrap());
     let by: f64 = ui.input(|i| {
         i.raw
             .events
@@ -679,17 +822,30 @@ fn speaker(
     let Some(v) = volume else { return };
     let fade = v.opacity();
     let level = if s.muted { 0.0 } else { (v.to / 100.0) as f32 };
-    let meter = Rect::from_x_y_ranges(header.x_range(), header.bottom() - 2.0..=header.bottom());
-    let mut done = meter;
-    done.set_right(meter.left() + meter.width() * level);
-    ui.painter()
-        .rect_filled(meter, 0.0, HAIRLINE.gamma_multiply(fade));
-    ui.painter()
-        .rect_filled(done, 0.0, TEXT.gamma_multiply(fade));
+    // The button's own rim is the meter, as the Watch's ring hugs its play button.
+    let radius = KNOB / 2.0 - 1.0;
+    ui.painter().circle_stroke(
+        c,
+        radius,
+        egui::Stroke::new(2.0, HAIRLINE.gamma_multiply(fade)),
+    );
+    // Clockwise from twelve o'clock, as far round as the volume.
+    let steps = (64.0 * level).ceil() as usize;
+    if steps > 0 {
+        let arc = (0..=steps)
+            .map(|k| {
+                let a = -std::f32::consts::FRAC_PI_2
+                    + std::f32::consts::TAU * level * k as f32 / steps as f32;
+                c + radius * vec2(a.cos(), a.sin())
+            })
+            .collect();
+        ui.painter()
+            .line(arc, egui::Stroke::new(2.0, TEXT.gamma_multiply(fade)));
+    }
     ui.ctx().request_repaint();
 }
 
-/// One row of a list: the name at the margin, then a playing dot and, for rows that open something, a chevron.
+/// One row of a list: the name at the margin, then a playing dot or, for rows that open something, a chevron.
 fn row(ui: &mut Ui, label: &str, selected: bool, playing: bool, opens: bool) -> Response {
     let (rect, r) = ui.allocate_exact_size(vec2(ui.available_width(), ROW), Sense::click());
     if !ui.is_rect_visible(rect) {
@@ -705,14 +861,14 @@ fn row(ui: &mut Ui, label: &str, selected: bool, playing: bool, opens: bool) -> 
     ui.painter().rect_filled(rect, 0.0, fill);
     let cy = rect.center().y;
     let mut right = rect.right() - MARGIN;
-    if opens {
-        chevron(ui, pos2(right, cy), 1.0, 4.0, DISABLED);
-        right -= 4.0 + 2.0 * UNIT;
-    }
+    // The playing dot takes the chevron's place rather than sitting beside it.
     if playing {
         ui.painter()
             .circle_filled(pos2(right - 3.0, cy), 3.0, ACCENT);
         right -= 6.0 + 2.0 * UNIT;
+    } else if opens {
+        chevron(ui, pos2(right, cy), 1.0, 4.0, DISABLED);
+        right -= 4.0 + 2.0 * UNIT;
     }
     let x = rect.left() + MARGIN;
     put(
@@ -724,23 +880,73 @@ fn row(ui: &mut Ui, label: &str, selected: bool, playing: bool, opens: bool) -> 
     r
 }
 
-/// A list of `n` rows that only draws the visible ones, scrolled to centre `reveal` when given.
-fn rows(ui: &mut Ui, n: usize, reveal: Option<usize>, mut row: impl FnMut(&mut Ui, usize)) {
-    ui.spacing_mut().item_spacing.y = 0.0;
+/// A list of `n` rows below the top band, drawing only the visible ones. With a `scroll`, it brings `target` to
+/// its middle as the scroll asks.
+fn rows(
+    ui: &mut Ui,
+    n: usize,
+    target: Option<usize>,
+    scroll: Option<&mut Scroll>,
+    mut row: impl FnMut(&mut Ui, usize),
+) {
+    let view = ui.available_height();
+    let height = TOP + n as f32 * ROW + 2.0 * UNIT;
     let mut area = egui::ScrollArea::vertical().auto_shrink(false);
-    if let Some(i) = reveal {
-        let top = i as f32 * ROW - (ui.available_height() - ROW) / 2.0;
-        area = area.vertical_scroll_offset(top.max(0.0));
-    }
-    area.show_rows(ui, ROW, n, |ui, range| {
-        for i in range {
-            row(ui, i);
+    let mut draw = |ui: &mut Ui, vp: Rect| {
+        ui.set_height(height);
+        let top = ui.max_rect().top();
+        let first = ((vp.min.y - TOP) / ROW).floor().max(0.0) as usize;
+        let last = (((vp.max.y - TOP) / ROW).ceil().max(0.0) as usize).min(n);
+        for i in first..last {
+            let at = Rect::from_min_size(
+                pos2(ui.max_rect().left(), top + TOP + i as f32 * ROW),
+                vec2(ui.max_rect().width(), ROW),
+            );
+            ui.scope_builder(egui::UiBuilder::new().max_rect(at).id_salt(i), |ui| {
+                row(ui, i)
+            });
         }
-    });
+    };
+    let Some(sc) = scroll else {
+        area.show_viewport(ui, |ui, vp| draw(ui, vp));
+        return;
+    };
+    if let (Some(i), Some(how)) = (target, sc.reveal.take()) {
+        let to = (TOP + i as f32 * ROW - (view - ROW) / 2.0).clamp(0.0, (height - view).max(0.0));
+        match how {
+            Reveal::Jump => {
+                sc.glide = None;
+                area = area.vertical_scroll_offset(to);
+            }
+            Reveal::Glide => {
+                sc.glide = Some(Glide {
+                    from: sc.offset,
+                    to,
+                    at: Instant::now(),
+                });
+            }
+        }
+    }
+    // Scrolling by hand takes over from a glide.
+    if ui.input(|i| i.smooth_scroll_delta.y != 0.0) {
+        sc.glide = None;
+    }
+    if let Some(g) = sc.glide {
+        let t = (g.at.elapsed().as_secs_f32() / GLIDE.as_secs_f32()).min(1.0);
+        let eased = 1.0 - (1.0 - t).powi(3);
+        area = area.vertical_scroll_offset(g.from + (g.to - g.from) * eased);
+        if t < 1.0 {
+            ui.ctx().request_repaint();
+        } else {
+            sc.glide = None;
+        }
+    }
+    sc.offset = area.show_viewport(ui, |ui, vp| draw(ui, vp)).state.offset.y;
 }
 
 /// A quiet line where a list would be: loading, empty, or what went wrong.
 fn note(ui: &mut Ui, text: &str) {
+    ui.add_space(TOP);
     let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), ROW), Sense::hover());
     let x = rect.left() + MARGIN;
     let g = fit(
@@ -791,6 +997,19 @@ fn put_top(ui: &Ui, g: Arc<Galley>, x: f32, y: f32) -> Rect {
     let rect = Rect::from_min_size(pos, g.size());
     ui.painter().galley(pos, g, TEXT);
     rect
+}
+
+/// How wide a line's ink is, first letter to last, without the space either side of the glyphs.
+fn ink_width(g: &Galley) -> f32 {
+    let Some(row) = g.rows.first() else {
+        return 0.0;
+    };
+    let (Some(first), Some(last)) = (row.row.glyphs.first(), row.row.glyphs.last()) else {
+        return g.size().x;
+    };
+    let left = first.pos.x + first.uv_rect.offset.x;
+    let right = last.pos.x + last.uv_rect.offset.x + last.uv_rect.size.x;
+    right - left
 }
 
 /// A chevron with its point at `tip`, pointing right (`dir` 1) or left (-1).

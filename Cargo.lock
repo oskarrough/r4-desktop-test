@@ -725,7 +725,9 @@ checksum = "05cbdc785020861553f230f23d330ba1fb72613b9d8e0e457f3bdc8ba6db6dcf"
 dependencies = [
  "ahash",
  "egui",
+ "ehttp",
  "enum-map",
+ "image",
  "itertools",
  "log",
  "mime_guess2",
@@ -745,6 +747,20 @@ dependencies = [
  "log",
  "profiling",
  "winit",
+]
+
+[[package]]
+name = "ehttp"
+version = "0.7.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9b4a4c99bf60678f5c2185fe425eac33e3e7c9fcfa6cbd632412691e4288f076"
+dependencies = [
+ "document-features",
+ "js-sys",
+ "ureq",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
 ]
 
 [[package]]
@@ -2315,6 +2331,7 @@ dependencies = [
  "fastframe-fonts",
  "fastframe-icons",
  "fastframe-text",
+ "image",
  "libmpv2",
  "serde",
  "serde_json",
