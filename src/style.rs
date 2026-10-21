@@ -43,10 +43,16 @@ pub struct Palette {
 }
 
 const DARK: &str = include_str!("../assets/themes/dark.json");
+const LIGHT: &str = include_str!("../assets/themes/light.json");
 
 impl Palette {
     pub fn dark() -> Self {
         static OWN: LazyLock<Palette> = LazyLock::new(|| Palette::own(true, DARK));
+        *OWN
+    }
+
+    pub fn light() -> Self {
+        static OWN: LazyLock<Palette> = LazyLock::new(|| Palette::own(false, LIGHT));
         *OWN
     }
 
@@ -97,6 +103,26 @@ impl Palette {
             _ => return false,
         }
         true
+    }
+}
+
+impl fastframe_theme::Palette for Palette {
+    fn base(base: fastframe_theme::Base) -> Self {
+        match base {
+            fastframe_theme::Base::Dark => Self::dark(),
+            fastframe_theme::Base::Light => Self::light(),
+        }
+    }
+
+    fn set(&mut self, name: &str, color: Color32) -> bool {
+        Palette::set(self, name, color)
+    }
+
+    /// A palette without its own edge (Omarchy's, a shared one) rims what floats with its hairline.
+    fn derive(&mut self, given: &std::collections::BTreeSet<&str>) {
+        if given.contains("outline") && !given.contains("edge") {
+            self.edge = self.hairline;
+        }
     }
 }
 
@@ -242,4 +268,30 @@ pub fn apply(ctx: &egui::Context, p: Palette) {
         v.weak_text_color = Some(p.secondary);
     });
     ctx.data_mut(|d| d.insert_temp(egui::Id::NULL, p));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn our_palettes_name_every_colour() {
+        for p in [Palette::dark(), Palette::light()] {
+            let colours = [
+                p.bg,
+                p.hairline,
+                p.hover,
+                p.selected,
+                p.text,
+                p.secondary,
+                p.disabled,
+                p.surface,
+                p.edge,
+                p.shadow,
+                p.accent,
+            ];
+            assert!(!colours.contains(&Color32::PLACEHOLDER), "{p:?}");
+        }
+        assert!(Palette::dark().dark && !Palette::light().dark);
+    }
 }

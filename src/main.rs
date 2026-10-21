@@ -6,6 +6,7 @@ mod demo;
 mod gui;
 mod player;
 mod style;
+mod theme;
 mod tracks;
 
 fn main() {

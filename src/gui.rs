@@ -94,6 +94,7 @@ pub fn run() -> eframe::Result {
                 keyed: false,
                 actions: Vec::new(),
                 demo: demo.is_some(),
+                theme: crate::theme::Theme::new(&cc.egui_ctx, demo.is_some()),
             };
             if let Some(d) = demo {
                 let (_, rx) = mpsc::channel();
@@ -146,6 +147,7 @@ struct App {
     actions: Vec<Action>,
     /// Showing the demo: the player's state stays as the demo set it.
     demo: bool,
+    theme: crate::theme::Theme,
 }
 
 struct Open {
@@ -227,6 +229,7 @@ enum Action {
 
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        self.theme.update(ui.ctx());
         let pal = palette(ui);
         self.receive();
         self.keys(ui.ctx());
@@ -320,6 +323,7 @@ impl eframe::App for App {
         for a in std::mem::take(&mut self.actions) {
             self.act(ui.ctx(), a);
         }
+        self.theme.paint(ui.ctx());
     }
 }
 
