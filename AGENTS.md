@@ -8,6 +8,15 @@
 - fix: claude-code claude-opus-5-5, medium
 - verify: codex gpt-6.1-sol, medium
 
+## Rust conventions
+
+- `app.rs` coordinates the frame and applies actions. Its private modules own navigation, browsing, playback controls, list scrolling, and shared drawing. Keep state with the rules that change it.
+- Views follow egui's immediate-mode model: borrow data and view state, draw, then queue actions. Apply those actions after drawing; keep egui IDs stable when moving code.
+- `library.rs` owns background channel and track loading; `player.rs` owns playback. Both wake the UI when results arrive. Views do not start network requests.
+- Use fastframe's existing fonts, icons, scrolling, theme, and platform support before adding local equivalents. `style.rs` defines the look; `theme.rs` follows and transitions the selected palette.
+- Name persistent state for its purpose (`pending_play`, `channel_transition`), not its position or direction. Keep helpers private; use `pub(super)` for interfaces inside `app` and explicit imports outside tests.
+- Keep tests beside the behavior they cover. Module moves preserve behavior, timing, and layout; avoid adding traits or configurable wrappers without a concrete second use.
+
 ## Checks
 
 `scripts/check` is the repo's checks (fmt, clippy, tests). It records a pass against the exact worktree content and toolchain, and on the same state prints that pass instead of rerunning: that counts as the checks having run. Any edit or rebase reruns everything. Don't run fastframe's own tests; it's pinned by tag. A change nobody can see (media keys, logging, window memory) needs no screenshots and no baseline build.

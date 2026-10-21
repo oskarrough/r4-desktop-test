@@ -1,10 +1,11 @@
 //! With a URL, play its audio via libmpv + yt-dlp and exit when it ends. Without one, open the channel list.
 use libmpv2::events::Event;
 
+mod app;
 mod cache;
 mod channels;
 mod demo;
-mod gui;
+mod library;
 mod media;
 mod player;
 mod style;
@@ -24,7 +25,7 @@ fn main() {
     }
     logging();
     let Some(url) = url else {
-        if let Err(e) = gui::run() {
+        if let Err(e) = app::run() {
             eprintln!("radio4000: {e}");
             std::process::exit(1);
         }
