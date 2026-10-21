@@ -1,10 +1,12 @@
 # Radio4000 desktop
 
-Native Radio4000 player. Right now just a playback spike: play the audio of one URL through libmpv, which resolves YouTube and friends with yt-dlp.
+Native Radio4000 player, but mostly exploring building native apps with rust. 
+
+Play the audio of one URL through libmpv, which resolves YouTube and friends.
 
 ## Install
 
-Linux and macOS (Apple Silicon):
+Linux and macOS:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/oskarrough/r4-desktop-test/main/install.sh | sh
@@ -18,15 +20,18 @@ irm https://raw.githubusercontent.com/oskarrough/r4-desktop-test/main/install.ps
 
 Run the same line again to update.
 
+<details>
+
+<summary>How to develop locally</summary>
+
+
 ## Running from source
 
 ```sh
-cargo run -- https://www.youtube.com/watch?v=1JLVbkHieaM
+cargo run
 ```
 
-Prints `playing: <title>` when the track loads and `ended: <reason>` when it stops. Ctrl-C quits.
-
-Needs libmpv (API 2.x) to link against and `yt-dlp` on `PATH`.
+Needs libmpv to link against and `yt-dlp` on `PATH`.
 
 ### Linux
 
@@ -42,8 +47,6 @@ Install the libmpv dev package and yt-dlp.
 brew install mpv yt-dlp
 ```
 
-On Apple Silicon, tell the linker where Homebrew lives: `export LIBRARY_PATH="$(brew --prefix)/lib"`.
-
 ### Windows
 
 1. Download `mpv-dev-x86_64-*.7z` from [shinchiro's mpv builds](https://github.com/shinchiro/mpv-winbuild-cmake/releases) and unpack it to e.g. `C:\mpv-dev`.
@@ -55,3 +58,6 @@ On Apple Silicon, tell the linker where Homebrew lives: `export LIBRARY_PATH="$(
 3. Point the linker at it: `$env:LIB += ";C:\mpv-dev"`.
 4. At runtime the exe needs `libmpv-2.dll`. Copy it next to `target\debug\radio4000.exe` or add `C:\mpv-dev` to `PATH`.
 5. Install yt-dlp (`winget install yt-dlp`) so it is on `PATH`.
+
+
+</details>
