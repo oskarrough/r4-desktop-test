@@ -32,6 +32,7 @@ fastframe_icons::icons! {
         Muted => lucide "volume-x",
         Search => lucide "search",
         Hash => "hash",
+        Check => "check",
         Back => lucide "chevron-left",
     }
 }
@@ -167,7 +168,8 @@ pub(super) fn chrome(
             }
             inner = t.x;
         }
-        let title = tag.map_or_else(|| open.name.clone(), |t| format!("#{t}"));
+        let title = tag.unwrap_or(&open.name);
+        let filtered = tag.is_some();
         let left = home + KNOB / 2.0 + 2.0 * UNIT;
         let right = inner - KNOB / 2.0 - 2.0 * UNIT;
         let arrived = stage(shown, 0.35, 1.0);
@@ -176,14 +178,26 @@ pub(super) fn chrome(
             pill(
                 ui,
                 pos2((left + right) / 2.0 + drift, cy),
-                &title,
+                title,
+                &open.name,
                 image,
                 (right - left).max(0.0),
+                filtered,
             )
         })
         .flatten();
-        if r.is_some_and(|r| r.on_hover_text("About this channel (i)").clicked()) {
-            actions.push(Action::Info);
+        // Narrowed, the pill is the filter: it opens the tags to change it, and its × lets go of it.
+        if let Some((r, clear)) = r {
+            if filtered {
+                if r.on_hover_text("Change tags (t)").clicked() {
+                    actions.push(Action::Search(SearchTarget::Tags(open.clone())));
+                }
+            } else if r.on_hover_text("About this channel (i)").clicked() {
+                actions.push(Action::Info);
+            }
+            if clear.is_some_and(|c| c.on_hover_text("Show all tracks").clicked()) {
+                actions.push(Action::ClearFilter);
+            }
         }
     });
 }
@@ -262,7 +276,16 @@ pub(super) fn close(ui: &mut Ui, c: Pos2, actions: &mut Vec<Action>) {
 }
 
 /// The title in a pill centred on `c`, led by the avatar when there is one. Pressable, like the knobs.
-fn pill(ui: &mut Ui, c: Pos2, title: &str, image: Option<&str>, max: f32) -> Option<Response> {
+/// With `clear`, an × ends it, answering on its own as the second response.
+fn pill(
+    ui: &mut Ui,
+    c: Pos2,
+    title: &str,
+    name: &str,
+    image: Option<&str>,
+    max: f32,
+    clear: bool,
+) -> Option<(Response, Option<Response>)> {
     let pal = palette(ui);
     if title.is_empty() {
         return None;
@@ -272,7 +295,7 @@ fn pill(ui: &mut Ui, c: Pos2, title: &str, image: Option<&str>, max: f32) -> Opt
     } else {
         3.0 * UNIT
     };
-    let trail = 3.0 * UNIT;
+    let trail = if clear { 7.0 * UNIT } else { 3.0 * UNIT };
     let g = fit(
         ui,
         title,
@@ -285,7 +308,16 @@ fn pill(ui: &mut Ui, c: Pos2, title: &str, image: Option<&str>, max: f32) -> Opt
     let width = (left + lead + ink_width(&g)).ceil() + trail - left;
     let rect = Rect::from_min_size(pos2(left, c.y - KNOB / 2.0), vec2(width, KNOB));
     let r = ui.interact(rect, ui.id().with("pill"), Sense::click());
-    let fill = if r.hovered() || r.has_focus() {
+    let cross = pos2(rect.right() - 3.5 * UNIT, c.y);
+    let x = clear.then(|| {
+        ui.interact(
+            Rect::from_center_size(cross, vec2(7.0 * UNIT, KNOB)),
+            ui.id().with("pill-clear"),
+            Sense::click(),
+        )
+    });
+    let on_x = x.as_ref().is_some_and(|x| x.hovered());
+    let fill = if (r.hovered() && !on_x) || r.has_focus() {
         pal.selected
     } else {
         pal.surface
@@ -299,10 +331,17 @@ fn pill(ui: &mut Ui, c: Pos2, title: &str, image: Option<&str>, max: f32) -> Opt
     );
     if image.is_some() {
         let at = Rect::from_min_size(pos2(left + UNIT, c.y - AVATAR / 2.0), vec2(AVATAR, AVATAR));
-        face(ui, at, image, title);
+        face(ui, at, image, name);
     }
     put(ui, g, left + lead, c.y);
-    Some(r)
+    if clear {
+        let ink = if on_x { pal.text } else { pal.secondary };
+        let stroke = egui::Stroke::new(1.5, ink);
+        for d in [vec2(3.0, 3.0), vec2(3.0, -3.0)] {
+            ui.painter().line_segment([cross - d, cross + d], stroke);
+        }
+    }
+    Some((r, x))
 }
 
 /// A channel's avatar in a circle, or its first letter while there's no picture.

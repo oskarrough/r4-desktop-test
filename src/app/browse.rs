@@ -1,10 +1,10 @@
 //! Channel browsing, search, details, and track lists.
 use super::Action;
-use super::list::{ListScroll, Reveal, note, row, rows};
+use super::list::{ListScroll, Reveal, Trail, note, row, rows};
 use super::navigation::{ChannelRef, snap};
 use super::transport::DOCK;
 use super::widgets::{
-    ICON, Icon, KNOB, TOP, back, chrome, close, face, fade, fit, ink_width, knob, put, put_top,
+    ICON, Icon, KNOB, TOP, chrome, close, face, fade, fit, ink_width, knob, put, put_top,
 };
 use crate::channels::{self, Channel};
 use crate::player::State;
@@ -18,7 +18,7 @@ use fastframe_fonts::Weight;
 pub(super) enum SearchTarget {
     Channels,
     Tracks(ChannelRef),
-    /// The channel's tags, picking one narrows the channel to it, on top of what it's narrowed to already.
+    /// The tags among what the channel shows, each a switch that narrows it further or lets go.
     Tags(ChannelRef),
 }
 
@@ -63,13 +63,13 @@ pub(super) fn shown_tracks(list: &[Track], filter: Option<&str>) -> Vec<usize> {
     }
 }
 
-/// The tags among what the channel shows, but those already filtered by, holding every word typed,
-/// a leading # or not, most used first.
+/// The tags among what the channel shows holding every word typed, a leading # or not: those it's narrowed to
+/// first, marked on, then the rest, most used first.
 pub(super) fn matching_tags<'a>(
     query: &str,
     list: &'a [Track],
     filter: Option<&str>,
-) -> Vec<(&'a str, usize)> {
+) -> Vec<(&'a str, usize, bool)> {
     let query = query.to_lowercase();
     let words: Vec<_> = query
         .split_whitespace()
@@ -77,10 +77,29 @@ pub(super) fn matching_tags<'a>(
         .collect();
     let taken = filter.map(tag_words).unwrap_or_default();
     let shown = shown_tracks(list, filter);
-    tracks::tags(shown.iter().map(|&i| &list[i]))
+    let mut tags: Vec<_> = tracks::tags(shown.iter().map(|&i| &list[i]))
         .into_iter()
-        .filter(|(tag, _)| !taken.iter().any(|t| t == tag) && words.iter().all(|w| tag.contains(w)))
-        .collect()
+        .filter(|(tag, _)| words.iter().all(|w| tag.contains(w)))
+        .map(|(tag, n)| (tag, n, taken.iter().any(|t| t == tag)))
+        .collect();
+    // Stable, so each group keeps its order.
+    tags.sort_by_key(|&(_, _, on)| !on);
+    tags
+}
+
+/// The filter with `tag` switched: dropped if it's in, added at the end if not. Nothing left is no filter.
+pub(super) fn toggle_tag(filter: Option<&str>, tag: &str) -> Option<String> {
+    let mut words: Vec<&str> = filter.unwrap_or("").split_whitespace().collect();
+    let had = words.len();
+    words.retain(|w| {
+        !w.strip_prefix('#')
+            .is_some_and(|t| t.eq_ignore_ascii_case(tag))
+    });
+    let mut filter = words.join(" ");
+    if words.len() == had {
+        filter = format!("{filter} #{tag}").trim_start().to_owned();
+    }
+    (!filter.is_empty()).then_some(filter)
 }
 
 /// The tags asked for in a query: its words that start with #.
@@ -149,7 +168,7 @@ fn channel_row(
         Some(c.image.as_deref()),
         selected,
         playing == Some(&c.slug),
-        opens,
+        if opens { Trail::Opens } else { Trail::None },
     );
     if r.clicked() {
         actions.push(Action::Open(c.slug.clone(), c.name.clone()));
@@ -218,7 +237,7 @@ pub(super) fn search_panel(
                             None,
                             cursor == i,
                             current == Some(index),
-                            false,
+                            Trail::None,
                         )
                         .0
                         .clicked()
@@ -229,7 +248,7 @@ pub(super) fn search_panel(
                 }
             }
         },
-        SearchTarget::Tags(open) => match tracks {
+        SearchTarget::Tags(_) => match tracks {
             None => note(ui, "Loading…"),
             Some(Err(e)) => note(ui, &format!("Could not load tracks: {e}")),
             Some(Ok(list)) => {
@@ -239,23 +258,16 @@ pub(super) fn search_panel(
                 } else {
                     search.scroll.cursor = search.scroll.cursor.min(hits.len() - 1);
                     let cursor = search.scroll.cursor;
-                    // The tag playing on its own carries the dot.
-                    let playing = state
-                        .filter
-                        .as_deref()
-                        .filter(|_| state.queue.as_deref() == Some(&open.slug))
-                        .and_then(|f| f.strip_prefix('#'))
-                        .filter(|f| !f.contains(char::is_whitespace));
                     rows(ui, hits.len(), None, &mut search.scroll, |ui, i| {
-                        let (tag, count) = hits[i];
+                        let (tag, count, on) = hits[i];
                         if row(
                             ui,
                             &format!("#{tag}"),
                             Some(&count.to_string()),
                             None,
                             cursor == i,
-                            playing == Some(tag),
-                            true,
+                            false,
+                            if on { Trail::On } else { Trail::None },
                         )
                         .0
                         .clicked()
@@ -271,7 +283,7 @@ pub(super) fn search_panel(
     fade(ui, rect);
     let side = 2.0 * UNIT + KNOB / 2.0;
     let cy = rect.top() + side;
-    back(ui, pos2(rect.left() + side, cy), actions);
+    close(ui, pos2(rect.left() + side, cy), actions);
     let field = Rect::from_x_y_ranges(
         rect.left() + 2.0 * side..=rect.right() - 2.0 * UNIT,
         cy - KNOB / 2.0..=cy + KNOB / 2.0,
@@ -413,7 +425,7 @@ pub(super) fn tracklist(
                     None,
                     selected,
                     current == Some(i),
-                    false,
+                    Trail::None,
                 )
                 .0
                 .clicked()
@@ -685,11 +697,21 @@ mod tests {
         // Tags offered on a narrowed channel count only what it shows, and leave out what's already asked for.
         assert_eq!(
             super::matching_tags("", &list, Some("#dub")),
-            [("roots", 1)]
+            [("dub", 2, true), ("roots", 1, false)]
+        );
+        assert_eq!(super::toggle_tag(None, "dub").as_deref(), Some("#dub"));
+        assert_eq!(
+            super::toggle_tag(Some("#dub party"), "roots").as_deref(),
+            Some("#dub party #roots")
         );
         assert_eq!(
+            super::toggle_tag(Some("#Dub party"), "dub").as_deref(),
+            Some("party")
+        );
+        assert_eq!(super::toggle_tag(Some("#dub"), "dub"), None);
+        assert_eq!(
             super::matching_tags("#du", &list, None),
-            [("dub", 2), ("dubstep", 1)]
+            [("dub", 2, false), ("dubstep", 1, false)]
         );
     }
 }

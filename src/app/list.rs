@@ -1,7 +1,7 @@
 //! Virtualized lists, empty-state notes, and keyboard cursor and reveal animation.
 use super::navigation::ease;
 use super::transport::DOCK;
-use super::widgets::{AVATAR, Icon, TOP, chevron, face, fit, put};
+use super::widgets::{AVATAR, ICON, Icon, TOP, chevron, face, fit, put};
 use crate::style::{BODY, MARGIN, Palette, UNIT, font, palette};
 use egui::text::{LayoutJob, TextFormat, TextWrapping};
 use egui::{Color32, Rect, Response, Sense, Ui, pos2, vec2};
@@ -40,7 +40,15 @@ struct Glide {
     at: Instant,
 }
 
-/// One row of a list: the name at the margin, then a playing dot or, for rows that open something, a chevron.
+/// What ends a row at the right, when it isn't playing: a chevron for rows that open something, a tick for one that's on.
+#[derive(Clone, Copy, PartialEq)]
+pub(super) enum Trail {
+    None,
+    Opens,
+    On,
+}
+
+/// One row of a list: the name at the margin, then a playing dot or what `trail` asks for.
 /// A `note` follows the name on the same line, quieter, and is the first to be cut short.
 /// `avatar` gives the row an avatar slot at the margin: the channel's image, or its initial when it has none.
 /// The avatar is a play button of its own, showing so while the row is pointed at or focused; its response comes second.
@@ -51,7 +59,7 @@ pub(super) fn row(
     avatar: Option<Option<&str>>,
     selected: bool,
     playing: bool,
-    opens: bool,
+    trail: Trail,
 ) -> (Response, Option<Response>) {
     let pal = palette(ui);
     let (rect, r) = ui.allocate_exact_size(vec2(ui.available_width(), ROW), Sense::click());
@@ -77,9 +85,15 @@ pub(super) fn row(
         ui.painter()
             .circle_filled(pos2(right - 3.0, cy), 3.0, pal.accent);
         right -= 6.0 + 2.0 * UNIT;
-    } else if opens {
+    } else if trail == Trail::Opens {
         chevron(ui, pos2(right, cy), 1.0, 4.0, pal.disabled);
         right -= 4.0 + 2.0 * UNIT;
+    } else if trail == Trail::On {
+        Icon::Check.image(pal.text, ICON).paint_at(
+            ui,
+            Rect::from_center_size(pos2(right - ICON / 2.0, cy), vec2(ICON, ICON)),
+        );
+        right -= ICON + 2.0 * UNIT;
     }
     let mut x = rect.left() + MARGIN;
     let mut play = None;

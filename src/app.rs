@@ -8,7 +8,7 @@ mod widgets;
 
 use self::browse::{
     Search, SearchTarget, channel_info, channel_list, matching, matching_tags, matching_tracks,
-    open_page, search_panel, shown_tracks, title, tracklist,
+    open_page, search_panel, shown_tracks, title, toggle_tag, tracklist,
 };
 use self::list::{ListScroll, Reveal, note};
 use self::navigation::{ChannelRef, Nav, Slide, snap};
@@ -151,8 +151,10 @@ enum Action {
     Search(SearchTarget),
     /// Play this track of the open channel, as far as it's narrowed to a filter.
     Play(usize),
-    /// Narrow the open channel to this filter.
+    /// Switch this tag of the open channel's filter on or off.
     Tag(String),
+    /// Show all of the open channel's tracks again.
+    ClearFilter,
     /// Play an original queue index from filtered results, keeping the query and list position.
     PlayTrack(ChannelRef, usize),
     Toggle,
@@ -701,7 +703,7 @@ impl App {
                         .tracks(&open.slug)
                         .and_then(Result::ok)
                         .and_then(|list| {
-                            let (tag, _) =
+                            let (tag, _, _) =
                                 *matching_tags(&search.query, list, self.nav.filter.as_deref())
                                     .get(search.scroll.cursor)?;
                             Some(Action::Tag(tag.to_owned()))
@@ -751,13 +753,25 @@ impl App {
                     self.find_playing();
                 }
             }
+            // The tags stay up, so a filter can be built a switch at a time; the cursor follows the tag it switched.
             Action::Tag(tag) => {
-                self.scrolling.stop();
-                self.nav.search = None;
-                self.nav.filter = Some(match self.nav.filter.take() {
-                    Some(filter) => format!("{filter} #{tag}"),
-                    None => format!("#{tag}"),
-                });
+                self.nav.filter = toggle_tag(self.nav.filter.as_deref(), &tag);
+                if let Some(search) = &mut self.nav.search
+                    && let SearchTarget::Tags(open) = &search.target
+                    && let Some(Ok(list)) = self.library.tracks(&open.slug)
+                {
+                    search.query.clear();
+                    let at = matching_tags("", list, self.nav.filter.as_deref())
+                        .iter()
+                        .position(|&(t, _, _)| t == tag)
+                        .unwrap_or(0);
+                    search.scroll.cursor = at;
+                    search.scroll.reveal = Some(Reveal::Show(at));
+                }
+                self.find_playing();
+            }
+            Action::ClearFilter => {
+                self.nav.filter = None;
                 self.find_playing();
             }
             Action::PlayChannel(slug, name) => {
