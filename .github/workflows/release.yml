@@ -1,0 +1,94 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  # Never cancel on main: a run stopped between delete and create leaves no release.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            asset: radio4000-linux-x86_64.tar.gz
+          - os: macos-latest
+            asset: radio4000-macos-arm64.tar.gz
+          - os: windows-latest
+            asset: radio4000-windows-x86_64.zip
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install libmpv (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libmpv-dev
+
+      - name: Install libmpv (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install mpv
+          echo "LIBRARY_PATH=$(brew --prefix)/lib" >> "$GITHUB_ENV"
+
+      - name: Install libmpv (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download --repo shinchiro/mpv-winbuild-cmake --pattern 'mpv-dev-x86_64-2*.7z' --output mpv-dev.7z
+          7z x mpv-dev.7z -ompv-dev
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
+          $bin = (Get-ChildItem "$vs\VC\Tools\MSVC\*\bin\Hostx64\x64\lib.exe" | Select-Object -First 1).DirectoryName
+          # Newer builds ship no mpv.def, so list the DLL's exports ourselves.
+          $exports = & "$bin\dumpbin.exe" /exports mpv-dev\libmpv-2.dll | Select-String '^\s+\d+\s+[0-9A-F]+\s+[0-9A-F]{8}\s+(\S+)' | ForEach-Object { $_.Matches[0].Groups[1].Value }
+          if (-not $exports) { throw 'no exports found in libmpv-2.dll' }
+          @('EXPORTS') + $exports | Set-Content mpv-dev\mpv.def
+          & "$bin\lib.exe" /def:mpv-dev\mpv.def /machine:x64 /out:mpv-dev\mpv.lib
+          "LIB=$env:LIB;$PWD\mpv-dev" >> $env:GITHUB_ENV
+
+      - run: cargo build --release
+
+      - name: Package (Unix)
+        if: runner.os != 'Windows'
+        run: tar -czf ${{ matrix.asset }} -C target/release radio4000
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Compress-Archive -Path target\release\radio4000.exe, mpv-dev\libmpv-2.dll -DestinationPath ${{ matrix.asset }}
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.asset }}
+          path: ${{ matrix.asset }}
+
+  release:
+    needs: build
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Replace the latest release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release delete latest --yes --cleanup-tag || true
+          gh release create latest dist/* --target "$GITHUB_SHA" --prerelease \
+            --title "Latest build" --notes "Built from $GITHUB_SHA on every push to main."
