@@ -109,6 +109,17 @@ impl eframe::App for App {
                             p.next();
                         }
                     });
+                    if let Some((mut pos, dur)) = p.progress() {
+                        ui.horizontal(|ui| {
+                            ui.label(clock(pos));
+                            ui.spacing_mut().slider_width = ui.available_width() - 50.0;
+                            let bar = egui::Slider::new(&mut pos, 0.0..=dur).show_value(false);
+                            if ui.add(bar).changed() {
+                                p.seek(pos);
+                            }
+                            ui.label(clock(dur));
+                        });
+                    }
                 }
                 match &open.tracks {
                     None => {
@@ -176,5 +187,25 @@ impl eframe::App for App {
         if let Some(c) = clicked {
             self.open = Some(Open::new(ui.ctx(), c));
         }
+    }
+}
+
+/// Seconds as m:ss, or h:mm:ss for long mixes.
+fn clock(secs: f64) -> String {
+    let s = secs.max(0.0) as u64;
+    let (h, m, s) = (s / 3600, s / 60 % 60, s % 60);
+    if h > 0 {
+        format!("{h}:{m:02}:{s:02}")
+    } else {
+        format!("{m}:{s:02}")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn clock_reads_like_a_player() {
+        assert_eq!(super::clock(65.9), "1:05");
+        assert_eq!(super::clock(3725.0), "1:02:05");
     }
 }
