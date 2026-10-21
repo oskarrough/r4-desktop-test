@@ -1,6 +1,7 @@
 //! With a URL, play its audio via libmpv + yt-dlp and exit when it ends. Without one, open the channel list.
 use libmpv2::events::Event;
 
+mod cache;
 mod channels;
 mod demo;
 mod gui;

@@ -75,7 +75,16 @@ pub fn run() -> eframe::Result {
             if demo.is_none() {
                 let ctx = cc.egui_ctx.clone();
                 std::thread::spawn(move || {
-                    let _ = tx.send(channels::fetch());
+                    // The cached list paints first, the network corrects it a moment later.
+                    if let Some(cached) = crate::cache::load() {
+                        let _ = tx.send(Ok(cached));
+                        ctx.request_repaint();
+                    }
+                    let fresh = channels::fetch();
+                    if let Ok(list) = &fresh {
+                        crate::cache::save(list);
+                    }
+                    let _ = tx.send(fresh);
                     ctx.request_repaint();
                 });
             }
@@ -330,7 +339,11 @@ impl eframe::App for App {
 impl App {
     fn receive(&mut self) {
         if let Ok(result) = self.rx.try_recv() {
-            self.channels = Some(result);
+            // A failed refresh is no reason to throw away a list that works.
+            let keep = result.is_err() && matches!(self.channels, Some(Ok(_)));
+            if !keep {
+                self.channels = Some(result);
+            }
         }
         for t in self.tracks.values_mut() {
             if let Ok(result) = t.rx.try_recv() {
