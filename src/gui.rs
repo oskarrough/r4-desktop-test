@@ -100,6 +100,7 @@ pub fn run() -> eframe::Result {
                 volume: None,
                 scroll: Scroll::default(),
                 channel_scroll: Scroll::default(),
+                scrolling: fastframe_scroll::Scrolling::default(),
                 keyed: false,
                 actions: Vec::new(),
                 demo: demo.is_some(),
@@ -151,6 +152,8 @@ struct App {
     /// The tracklist's scroll and cursor, and the channel list's.
     scroll: Scroll,
     channel_scroll: Scroll,
+    /// Wheel step, touchpad speed and glide, and axis lock for every list.
+    scrolling: fastframe_scroll::Scrolling,
     /// The arrow keys are in use: show the cursor until the pointer moves.
     keyed: bool,
     actions: Vec<Action>,
@@ -242,6 +245,7 @@ impl eframe::App for App {
         let pal = palette(ui);
         self.receive();
         self.keys(ui.ctx());
+        self.scrolling.apply(ui.ctx());
         let wide = ui.ctx().content_rect().width() >= WIDE;
         let state = &self.player.state;
         let playing = state.queue.as_deref();
@@ -430,6 +434,8 @@ impl App {
                     ),
                 };
                 if len > 0 {
+                    // The cursor takes over from a touchpad's glide.
+                    self.scrolling.stop();
                     scroll.cursor = scroll.cursor.saturating_add_signed(by).min(len - 1);
                     scroll.reveal = Some(Reveal::Show(scroll.cursor));
                 }
@@ -457,6 +463,8 @@ impl App {
                     false => 0,
                 };
                 self.scroll.glide = None;
+                // A glide on the channel list stays there.
+                self.scrolling.stop();
                 self.tracks
                     .entry(slug.clone())
                     .or_insert_with(|| Tracks::fetch(ctx, &slug));
@@ -466,6 +474,7 @@ impl App {
                 self.now = false;
             }
             Action::Back => {
+                self.scrolling.stop();
                 if self.now {
                     self.now = false;
                 } else {
