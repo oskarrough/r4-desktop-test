@@ -49,8 +49,12 @@ jobs:
           gh release download --repo shinchiro/mpv-winbuild-cmake --pattern 'mpv-dev-x86_64-2*.7z' --output mpv-dev.7z
           7z x mpv-dev.7z -ompv-dev
           $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
-          $lib = Get-ChildItem "$vs\VC\Tools\MSVC\*\bin\Hostx64\x64\lib.exe" | Select-Object -First 1
-          & $lib.FullName /def:mpv-dev\mpv.def /machine:x64 /out:mpv-dev\mpv.lib
+          $bin = (Get-ChildItem "$vs\VC\Tools\MSVC\*\bin\Hostx64\x64\lib.exe" | Select-Object -First 1).DirectoryName
+          # Newer builds ship no mpv.def, so list the DLL's exports ourselves.
+          $exports = & "$bin\dumpbin.exe" /exports mpv-dev\libmpv-2.dll | Select-String '^\s+\d+\s+[0-9A-F]+\s+[0-9A-F]{8}\s+(\S+)' | ForEach-Object { $_.Matches[0].Groups[1].Value }
+          if (-not $exports) { throw 'no exports found in libmpv-2.dll' }
+          @('EXPORTS') + $exports | Set-Content mpv-dev\mpv.def
+          & "$bin\lib.exe" /def:mpv-dev\mpv.def /machine:x64 /out:mpv-dev\mpv.lib
           "LIB=$env:LIB;$PWD\mpv-dev" >> $env:GITHUB_ENV
 
       - run: cargo build --release
