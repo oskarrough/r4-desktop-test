@@ -2,8 +2,10 @@
 use libmpv2::events::Event;
 
 mod channels;
+mod demo;
 mod gui;
 mod player;
+mod style;
 mod tracks;
 
 fn main() {

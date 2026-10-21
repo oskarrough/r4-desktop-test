@@ -2,23 +2,37 @@
 //! Small first: one view at a time with a transport along the bottom. With room, channels and tracks sit side by side.
 use crate::channels::{self, Channel};
 use crate::player::{self, Command, Player, State};
+use crate::style::*;
 use crate::tracks::{self, Track};
-use egui::{Key, Modifiers, PointerButton, Rect, RichText, Sense, vec2};
+use egui::text::{LayoutJob, TextWrapping};
+use egui::{
+    Color32, FontId, Galley, Key, Modifiers, PointerButton, Pos2, Rect, Response, Sense, Ui, pos2,
+    vec2,
+};
+use fastframe_fonts::Weight;
 use std::collections::HashMap;
-use std::sync::mpsc;
+use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
 /// From this width channels and tracks sit side by side.
 const WIDE: f32 = 560.0;
-/// Height of a list row, an easy target in a small window.
-const ROW: f32 = 30.0;
+/// A list row.
+const ROW: f32 = 8.0 * UNIT;
+/// The bar along the top of a view: back, title, what's playing.
+const HEADER: f32 = 10.0 * UNIT;
+/// The transport along the bottom, its progress line included.
+const BAR: f32 = 14.0 * UNIT;
+/// The progress line on the transport's top edge, thicker under the pointer.
+const LINE: f32 = 2.0;
+/// Transport icons, and the square each one answers clicks in.
+const ICON: f32 = 16.0;
+const HIT: f32 = 8.0 * UNIT;
 
 fastframe_icons::icons! {
     /// Every icon the window draws.
     pub enum Icon {
         prefix: "radio4000-icon-",
         directory: "../assets/icons/",
-        Back => lucide "arrow-left",
         Play => "play-filled",
         Pause => "pause-filled",
         Prev => "skip-back-filled",
@@ -37,23 +51,21 @@ pub fn run() -> eframe::Result {
         "Radio4000",
         options,
         Box::new(|cc| {
-            let mut fonts = fastframe_fonts::FontSetup::default().definitions();
-            let rendering = fastframe_text::detect();
-            rendering.apply_to(&mut fonts);
-            cc.egui_ctx.set_fonts(fonts);
-            cc.egui_ctx
-                .all_styles_mut(|style| rendering.apply_to_visuals(&mut style.visuals));
+            crate::style::install(&cc.egui_ctx);
             egui_extras::install_image_loaders(&cc.egui_ctx);
             fastframe_icons::install::<Icon>(&cc.egui_ctx);
 
             let (tx, rx) = mpsc::channel();
+            let demo = crate::demo::from_env();
+            if demo.is_none() {
+                let ctx = cc.egui_ctx.clone();
+                std::thread::spawn(move || {
+                    let _ = tx.send(channels::fetch());
+                    ctx.request_repaint();
+                });
+            }
             let ctx = cc.egui_ctx.clone();
-            std::thread::spawn(move || {
-                let _ = tx.send(channels::fetch());
-                ctx.request_repaint();
-            });
-            let ctx = cc.egui_ctx.clone();
-            Ok(Box::new(App {
+            let mut app = App {
                 rx,
                 channels: None,
                 tracks: HashMap::new(),
@@ -63,7 +75,28 @@ pub fn run() -> eframe::Result {
                 scrub: None,
                 reveal: false,
                 actions: Vec::new(),
-            }))
+                demo: demo.is_some(),
+            };
+            if let Some(d) = demo {
+                let (_, rx) = mpsc::channel();
+                let open = Open {
+                    slug: "oskar".into(),
+                    name: "Radio Oskar".into(),
+                };
+                app.tracks.insert(
+                    open.slug.clone(),
+                    Tracks {
+                        rx,
+                        list: Some(Ok(d.tracks)),
+                    },
+                );
+                app.channels = Some(Ok(d.channels));
+                app.player.state = d.state;
+                app.open = d.open.then_some(open);
+                app.now = d.now;
+                app.reveal = true;
+            }
+            Ok(Box::new(app))
         }),
     )
 }
@@ -82,6 +115,8 @@ struct App {
     /// Scroll the playing track into view on the next frame.
     reveal: bool,
     actions: Vec<Action>,
+    /// Showing the demo: the player's state stays as the demo set it.
+    demo: bool,
 }
 
 struct Open {
@@ -121,36 +156,51 @@ impl eframe::App for App {
         let playing = state.queue.as_deref();
         let actions = &mut self.actions;
 
+        let flat = egui::Frame::NONE.fill(BG);
         if !self.now {
-            egui::Panel::bottom("transport").show(ui, |ui| {
-                transport(ui, state, &mut self.scrub, actions);
-            });
+            egui::Panel::bottom("transport")
+                .frame(flat)
+                .exact_size(BAR)
+                .show_separator_line(false)
+                .show(ui, |ui| transport(ui, state, &mut self.scrub, actions));
         }
         if self.now {
-            egui::CentralPanel::default().show(ui, |ui| {
+            egui::CentralPanel::no_frame().frame(flat).show(ui, |ui| {
                 now_playing(ui, state, &mut self.scrub, actions);
             });
         } else if wide {
             let open = self.open.as_ref().map(|o| o.slug.as_str());
             egui::Panel::left("channels")
+                .frame(flat)
                 .resizable(true)
                 .default_size(240.0)
                 .show(ui, |ui| {
-                    // Truncated rows ask for no width, and the panel would shrink to fit them.
-                    ui.set_min_width(ui.available_width());
-                    channel_list(ui, &self.channels, open, playing, actions);
+                    header(ui, "Radio4000", false, None, actions);
+                    channel_list(ui, &self.channels, open, playing, false, actions);
                 });
-            egui::CentralPanel::default().show(ui, |ui| match &self.open {
-                Some(o) => tracklist(ui, o, &self.tracks, state, false, &mut self.reveal, actions),
-                None => {
-                    ui.weak("Pick a channel.");
-                }
-            });
+            egui::CentralPanel::no_frame()
+                .frame(flat)
+                .show(ui, |ui| match &self.open {
+                    Some(o) => {
+                        tracklist(ui, o, &self.tracks, state, false, &mut self.reveal, actions)
+                    }
+                    None => {
+                        header(ui, "", false, Some(state), actions);
+                        note(ui, "Pick a channel.");
+                    }
+                });
         } else {
-            egui::CentralPanel::default().show(ui, |ui| match &self.open {
-                Some(o) => tracklist(ui, o, &self.tracks, state, true, &mut self.reveal, actions),
-                None => channel_list(ui, &self.channels, None, playing, actions),
-            });
+            egui::CentralPanel::no_frame()
+                .frame(flat)
+                .show(ui, |ui| match &self.open {
+                    Some(o) => {
+                        tracklist(ui, o, &self.tracks, state, true, &mut self.reveal, actions)
+                    }
+                    None => {
+                        header(ui, "Radio4000", false, Some(state), actions);
+                        channel_list(ui, &self.channels, None, playing, true, actions);
+                    }
+                });
         }
 
         for a in std::mem::take(&mut self.actions) {
@@ -170,7 +220,9 @@ impl App {
             }
         }
         let before = (self.player.state.queue.clone(), self.player.state.index);
-        self.player.update();
+        if !self.demo {
+            self.player.update();
+        }
         let s = &self.player.state;
         if s.index.is_some() && (s.queue.clone(), s.index) != before {
             self.reveal = true;
@@ -269,121 +321,127 @@ fn title(t: &Track) -> &str {
     t.title.as_deref().unwrap_or(&t.url)
 }
 
-/// The bar along the bottom: a thin seek bar, then the buttons and what's on. Clicking the title opens the now-playing view.
-fn transport(ui: &mut egui::Ui, s: &State, scrub: &mut Option<Scrub>, actions: &mut Vec<Action>) {
-    if let Some(e) = &s.error {
-        ui.label(format!("Can't play: {e}"));
-        return;
-    }
-    seek_bar(ui, s, scrub, actions);
-    ui.horizontal(|ui| {
-        buttons(ui, s, 18.0, actions);
-        ui.vertical(|ui| {
-            ui.spacing_mut().item_spacing.y = 0.0;
-            let (top, bottom) = if s.queue.is_some() {
-                let time = s.dur.map_or_else(String::new, |d| {
-                    format!(" · {} / {}", clock(shown(s, scrub)), clock(d))
-                });
-                (
-                    RichText::new(&s.title).strong(),
-                    format!("{}{time}", s.channel),
-                )
-            } else {
-                (RichText::new("Nothing playing").weak(), String::new())
-            };
-            let a = ui.add(egui::Label::new(top).truncate().sense(Sense::click()));
-            let b = ui.add(
-                egui::Label::new(RichText::new(bottom).weak().small())
-                    .truncate()
-                    .sense(Sense::click()),
-            );
-            if a.clicked() || b.clicked() {
-                actions.push(Action::ShowNow);
-            }
-        });
-    });
-}
+/// The bar along the bottom: the progress line on its top edge, what's on at the left, play and next at the right.
+/// Clicking what's on opens the now-playing view.
+fn transport(ui: &mut Ui, s: &State, scrub: &mut Option<Scrub>, actions: &mut Vec<Action>) {
+    let rect = ui.max_rect();
+    let hit = Rect::from_min_size(rect.min, vec2(rect.width(), 2.0 * UNIT));
+    seek(ui, hit, true, LINE, s, scrub, actions);
 
-/// The now-playing view: big title and buttons, nothing else.
-fn now_playing(ui: &mut egui::Ui, s: &State, scrub: &mut Option<Scrub>, actions: &mut Vec<Action>) {
-    if back_button(ui).clicked() {
-        actions.push(Action::Back);
-    }
-    ui.vertical_centered(|ui| {
-        ui.add_space((ui.available_height() / 2.0 - 90.0).max(8.0));
-        ui.add(egui::Label::new(RichText::new(&s.title).heading()).wrap());
-        if let Some(slug) = &s.queue
-            && ui.link(RichText::new(&s.channel).weak()).clicked()
-        {
-            actions.push(Action::Open(slug.clone(), s.channel.clone()));
-        }
-        ui.add_space(12.0);
-        seek_bar(ui, s, scrub, actions);
-        ui.horizontal(|ui| {
-            ui.weak(clock(shown(s, scrub)));
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.weak(s.dur.map_or_else(|| "-:--".into(), clock));
-            });
-        });
-        ui.add_space(8.0);
-        // Centre the row of buttons by hand; a horizontal layout always starts at the left.
-        let size = 30.0;
-        let width = 3.0 * (size + 12.0) + 2.0 * ui.spacing().item_spacing.x;
-        ui.horizontal(|ui| {
-            ui.add_space(((ui.available_width() - width) / 2.0).max(0.0));
-            buttons(ui, s, size, actions);
-        });
-    });
-}
-
-/// Previous, play/pause and next. Play shows a spinner while the track resolves.
-fn buttons(ui: &mut egui::Ui, s: &State, size: f32, actions: &mut Vec<Action>) {
+    let cy = rect.top() + LINE + (BAR - LINE) / 2.0;
     let loaded = s.queue.is_some();
-    if ui
-        .add_enabled(loaded, icon_button(ui, Icon::Prev, size))
-        .on_hover_text("Previous (p)")
-        .clicked()
-    {
-        actions.push(Action::Send(Command::Prev));
-    }
-    if s.loading() {
-        let edge = size + 12.0;
-        ui.allocate_ui(vec2(edge, edge), |ui| {
-            ui.centered_and_justified(|ui| ui.add(egui::Spinner::new().size(size)));
-        });
-    } else {
-        let (icon, tip) = if loaded && !s.paused {
-            (Icon::Pause, "Pause (space)")
-        } else {
-            (Icon::Play, "Play (space)")
-        };
-        if ui
-            .add(icon_button(ui, icon, size))
-            .on_hover_text(tip)
-            .clicked()
-        {
-            actions.push(Action::Toggle);
-        }
-    }
-    if ui
-        .add_enabled(loaded, icon_button(ui, Icon::Next, size))
-        .on_hover_text("Next (n)")
-        .clicked()
-    {
+    let next = pos2(rect.right() - MARGIN - half(Icon::Next, ICON), cy);
+    let play = next - vec2(HIT, 0.0);
+    if icon_button(ui, Icon::Next, next, ICON, loaded).clicked() {
         actions.push(Action::Send(Command::Next));
     }
+    play_button(ui, s, play, ICON, actions);
+
+    let x = rect.left() + MARGIN;
+    let width = play.x - HIT / 2.0 - x;
+    let lines = if let Some(e) = &s.error {
+        vec![(
+            format!("Can't play: {e}"),
+            font(SMALL, Weight::Regular),
+            SECONDARY,
+        )]
+    } else if loaded {
+        let time = s.dur.map_or_else(String::new, |d| {
+            format!(" · {} / {}", clock(shown(s, scrub)), clock(d))
+        });
+        vec![
+            (s.title.clone(), font(BODY, Weight::SemiBold), TEXT),
+            (
+                format!("{}{time}", s.channel),
+                font(SMALL, Weight::Regular),
+                SECONDARY,
+            ),
+        ]
+    } else {
+        vec![(
+            "Nothing playing".into(),
+            font(BODY, Weight::Regular),
+            SECONDARY,
+        )]
+    };
+    let gap = 2.0 * UNIT;
+    let mut y = cy - gap * (lines.len() - 1) as f32;
+    let mut area = Rect::NOTHING;
+    for (text, f, color) in lines {
+        area = area.union(put(ui, fit(ui, &text, f, color, width), x, y));
+        y += 2.0 * gap;
+    }
+    let area = Rect::from_x_y_ranges(x..=x + width, rect.top() + LINE..=rect.bottom());
+    if loaded
+        && ui
+            .interact(area, ui.id().with("now"), Sense::click())
+            .clicked()
+    {
+        actions.push(Action::ShowNow);
+    }
 }
 
-fn icon_button(ui: &egui::Ui, icon: Icon, size: f32) -> egui::Button<'static> {
-    // Button::new, unlike Button::image, keeps the icon at the size asked for.
-    egui::Button::new(icon.image(ui.visuals().text_color(), size))
-        .frame_when_inactive(false)
-        .min_size(vec2(size + 12.0, size + 12.0))
-}
+/// The now-playing view, laid out like Apple's: title and channel at the margin, the seek bar with its times,
+/// then previous, play and next, the whole group centred in the window.
+fn now_playing(ui: &mut Ui, s: &State, scrub: &mut Option<Scrub>, actions: &mut Vec<Action>) {
+    header(ui, "Now playing", true, None, actions);
+    let area = ui.available_rect_before_wrap();
+    let x = area.left() + MARGIN;
+    let width = area.width() - 2.0 * MARGIN;
 
-fn back_button(ui: &mut egui::Ui) -> egui::Response {
-    ui.add(icon_button(ui, Icon::Back, 18.0))
-        .on_hover_text("Back (esc)")
+    let mut job = LayoutJob::simple(s.title.clone(), font(LARGE, Weight::SemiBold), TEXT, width);
+    job.wrap.max_rows = 2;
+    let title = ui.painter().layout_job(job);
+    let channel = fit(ui, &s.channel, font(BODY, Weight::Regular), ACCENT, width);
+    let big = 2.0 * ICON;
+    // Each step below is a gap on the grid, from the title's top to the buttons' bottom.
+    let height =
+        title.size().y + UNIT + channel.size().y + 6.0 * UNIT + 8.0 * UNIT + 8.0 * UNIT + big;
+    let mut y = (area.top() + (area.height() - height) / 2.0).max(area.top() + 2.0 * UNIT);
+    y = (y / UNIT).round() * UNIT;
+
+    put_top(ui, title.clone(), x, y);
+    y += title.size().y + UNIT;
+    let r = put_top(ui, channel.clone(), x, y);
+    if let Some(slug) = &s.queue {
+        let r = ui.interact(r, ui.id().with("channel"), Sense::click());
+        if r.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+            actions.push(Action::Open(slug.clone(), s.channel.clone()));
+        }
+    }
+    y += channel.size().y + 6.0 * UNIT;
+
+    let hit = Rect::from_min_size(pos2(x, y), vec2(width, 4.0 * UNIT));
+    seek(ui, hit, false, 2.0 * LINE, s, scrub, actions);
+    y += 4.0 * UNIT + 4.0 * UNIT;
+    let small = font(SMALL, Weight::Regular);
+    put(
+        ui,
+        fit(ui, &clock(shown(s, scrub)), small.clone(), SECONDARY, width),
+        x,
+        y,
+    );
+    let left = s.dur.map_or_else(
+        || "-:--".into(),
+        |d| format!("−{}", clock(d - shown(s, scrub))),
+    );
+    let g = fit(ui, &left, small, SECONDARY, width);
+    put(ui, g.clone(), x + width - g.size().x, y);
+    y += 8.0 * UNIT + big / 2.0;
+
+    let loaded = s.queue.is_some();
+    let step = (width / 3.0).min(24.0 * UNIT);
+    let mid = pos2(area.center().x, y);
+    let big_hit = |ui: &mut Ui, icon, c, enabled| {
+        icon_button_sized(ui, icon, c, big * 0.75, 12.0 * UNIT, enabled)
+    };
+    if big_hit(ui, Icon::Prev, mid - vec2(step, 0.0), loaded).clicked() {
+        actions.push(Action::Send(Command::Prev));
+    }
+    play_button_sized(ui, s, mid, big, 12.0 * UNIT, actions);
+    if big_hit(ui, Icon::Next, mid + vec2(step, 0.0), loaded).clicked() {
+        actions.push(Action::Send(Command::Next));
+    }
 }
 
 /// Where the track is, or where it is being dragged to.
@@ -391,21 +449,313 @@ fn shown(s: &State, scrub: &Option<Scrub>) -> f64 {
     scrub.as_ref().map_or(s.pos, |sc| sc.to)
 }
 
-/// A thin bar that thickens under the pointer. Seeks once it is let go, not on every step of a drag.
-fn seek_bar(ui: &mut egui::Ui, s: &State, scrub: &mut Option<Scrub>, actions: &mut Vec<Action>) {
-    let (rect, resp) =
-        ui.allocate_exact_size(vec2(ui.available_width(), 12.0), Sense::click_and_drag());
+fn channel_list(
+    ui: &mut Ui,
+    channels: &Option<Result<Vec<Channel>, String>>,
+    open: Option<&str>,
+    playing: Option<&str>,
+    opens: bool,
+    actions: &mut Vec<Action>,
+) {
+    let list = match channels {
+        None => return note(ui, "Loading…"),
+        Some(Err(e)) => return note(ui, &format!("Could not load channels: {e}")),
+        Some(Ok(list)) => list,
+    };
+    rows(ui, list.len(), None, |ui, i| {
+        let c = &list[i];
+        let selected = open == Some(c.slug.as_str());
+        if row(ui, &c.name, selected, playing == Some(&c.slug), opens).clicked() {
+            actions.push(Action::Open(c.slug.clone(), c.name.clone()));
+        }
+    });
+}
+
+fn tracklist(
+    ui: &mut Ui,
+    open: &Open,
+    tracks: &HashMap<String, Tracks>,
+    s: &State,
+    back: bool,
+    reveal: &mut bool,
+    actions: &mut Vec<Action>,
+) {
+    header(ui, &open.name, back, Some(s), actions);
+    let list = match tracks.get(&open.slug).and_then(|t| t.list.as_ref()) {
+        None => return note(ui, "Loading…"),
+        Some(Err(e)) => return note(ui, &format!("Could not load tracks: {e}")),
+        Some(Ok(list)) => list,
+    };
+    let current = s.index.filter(|_| s.queue.as_deref() == Some(&open.slug));
+    let target = current.filter(|_| std::mem::take(reveal));
+    rows(ui, list.len(), target, |ui, i| {
+        if row(ui, title(&list[i]), false, current == Some(i), false).clicked() {
+            actions.push(Action::Play(i));
+        }
+    });
+}
+
+/// The bar along the top: a back chevron, the title centred, and what's playing at the right, as on an iPod.
+fn header(ui: &mut Ui, title: &str, back: bool, s: Option<&State>, actions: &mut Vec<Action>) {
+    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), HEADER), Sense::hover());
+    let p = ui.painter();
+    p.rect_filled(
+        Rect::from_x_y_ranges(rect.x_range(), rect.bottom() - 1.0..=rect.bottom()),
+        0.0,
+        HAIRLINE,
+    );
+    let cy = rect.top() + (HEADER - 1.0) / 2.0;
+    let side = MARGIN + 4.0 * UNIT;
+    let g = fit(
+        ui,
+        title,
+        font(BODY, Weight::SemiBold),
+        TEXT,
+        rect.width() - 2.0 * side,
+    );
+    put(ui, g.clone(), rect.center().x - g.size().x / 2.0, cy);
+
+    if back {
+        let hit = Rect::from_x_y_ranges(
+            rect.left()..=rect.left() + side,
+            rect.top()..=rect.bottom() - 1.0,
+        );
+        let r = ui.interact(hit, ui.id().with("back"), Sense::click());
+        chevron(
+            ui,
+            pos2(rect.left() + MARGIN, cy),
+            -1.0,
+            5.0,
+            if r.hovered() { ACCENT } else { TEXT },
+        );
+        if r.on_hover_text("Back (esc)").clicked() {
+            actions.push(Action::Back);
+        }
+    }
+    if let Some(s) = s.filter(|s| s.queue.is_some()) {
+        let icon = if s.paused { Icon::Pause } else { Icon::Play };
+        let size = 12.0;
+        let c = pos2(rect.right() - MARGIN - half(icon, size), cy);
+        let hit = Rect::from_center_size(c, vec2(HIT, HIT));
+        let r = ui.interact(hit, ui.id().with("playing"), Sense::click());
+        icon.image(ACCENT, size)
+            .paint_at(ui, Rect::from_center_size(c, vec2(size, size)));
+        if r.on_hover_text("Now playing").clicked() {
+            actions.push(Action::ShowNow);
+        }
+    }
+}
+
+/// One row of a list: the name at the margin, then a playing dot and, for rows that open something, a chevron.
+fn row(ui: &mut Ui, label: &str, selected: bool, playing: bool, opens: bool) -> Response {
+    let (rect, r) = ui.allocate_exact_size(vec2(ui.available_width(), ROW), Sense::click());
+    if !ui.is_rect_visible(rect) {
+        return r;
+    }
+    let fill = if selected {
+        SELECTED
+    } else if r.hovered() || r.has_focus() {
+        HOVER
+    } else {
+        Color32::TRANSPARENT
+    };
+    ui.painter().rect_filled(rect, 0.0, fill);
+    let cy = rect.center().y;
+    let mut right = rect.right() - MARGIN;
+    if opens {
+        chevron(ui, pos2(right, cy), 1.0, 4.0, DISABLED);
+        right -= 4.0 + 2.0 * UNIT;
+    }
+    if playing {
+        ui.painter()
+            .circle_filled(pos2(right - 3.0, cy), 3.0, ACCENT);
+        right -= 6.0 + 2.0 * UNIT;
+    }
+    let x = rect.left() + MARGIN;
+    put(
+        ui,
+        fit(ui, label, font(BODY, Weight::Regular), TEXT, right - x),
+        x,
+        cy,
+    );
+    r
+}
+
+/// A list of `n` rows that only draws the visible ones, scrolled to centre `reveal` when given.
+fn rows(ui: &mut Ui, n: usize, reveal: Option<usize>, mut row: impl FnMut(&mut Ui, usize)) {
+    ui.spacing_mut().item_spacing.y = 0.0;
+    let mut area = egui::ScrollArea::vertical().auto_shrink(false);
+    if let Some(i) = reveal {
+        let top = i as f32 * ROW - (ui.available_height() - ROW) / 2.0;
+        area = area.vertical_scroll_offset(top.max(0.0));
+    }
+    area.show_rows(ui, ROW, n, |ui, range| {
+        for i in range {
+            row(ui, i);
+        }
+    });
+}
+
+/// A quiet line where a list would be: loading, empty, or what went wrong.
+fn note(ui: &mut Ui, text: &str) {
+    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), ROW), Sense::hover());
+    let x = rect.left() + MARGIN;
+    let g = fit(
+        ui,
+        text,
+        font(BODY, Weight::Regular),
+        SECONDARY,
+        rect.right() - MARGIN - x,
+    );
+    put(ui, g, x, rect.center().y);
+}
+
+/// One line of text, cut short with an ellipsis past `width`.
+fn fit(ui: &Ui, text: &str, font: FontId, color: Color32, width: f32) -> Arc<Galley> {
+    let mut job = LayoutJob::simple_singleline(text.to_owned(), font, color);
+    job.wrap = TextWrapping::truncate_at_width(width.max(0.0));
+    ui.painter().layout_job(job)
+}
+
+/// Paints a line with the ink of its first letter at `x` and its capitals centred on `y`, its baseline on a whole pixel.
+fn put(ui: &Ui, g: Arc<Galley>, x: f32, y: f32) -> Rect {
+    let size = g
+        .job
+        .sections
+        .first()
+        .map_or(BODY, |s| s.format.font_id.size);
+    let baseline = g
+        .rows
+        .first()
+        .and_then(|r| r.row.glyphs.first().map(|gl| r.pos.y + gl.pos.y))
+        .unwrap_or(g.size().y);
+    let ppp = ui.pixels_per_point();
+    let line = fastframe_text::snap_to_pixels(y + CAP * size / 2.0, ppp);
+    put_top(ui, g, x, line - baseline)
+}
+
+/// Paints a line with the ink of its first letter at `x` and its top at `y`, on whole pixels.
+/// Starting from the ink rather than the glyph's box lines text up with bars and icons at the same edge.
+fn put_top(ui: &Ui, g: Arc<Galley>, x: f32, y: f32) -> Rect {
+    let ppp = ui.pixels_per_point();
+    let snap = |v| fastframe_text::snap_to_pixels(v, ppp);
+    let ink = g
+        .rows
+        .first()
+        .and_then(|r| r.row.glyphs.first())
+        .map_or(0.0, |g| g.uv_rect.offset.x);
+    let pos = pos2(snap(x - ink), snap(y));
+    let rect = Rect::from_min_size(pos, g.size());
+    ui.painter().galley(pos, g, TEXT);
+    rect
+}
+
+/// A chevron with its point at `tip`, pointing right (`dir` 1) or left (-1).
+fn chevron(ui: &Ui, tip: Pos2, dir: f32, h: f32, color: Color32) {
+    // Pull the point in by half the stroke, so the ink and not the line's centre meets the edge.
+    let tip = tip - vec2(dir * 0.75, 0.0);
+    let arm = vec2(-dir * h, h);
+    ui.painter().line(
+        vec![tip + vec2(arm.x, -arm.y), tip, tip + arm],
+        egui::Stroke::new(1.5, color),
+    );
+}
+
+/// Half the drawn width of an icon at `size`, from its glyph in the 24-unit box, stroke included.
+fn half(icon: Icon, size: f32) -> f32 {
+    let units = match icon {
+        Icon::Play => 8.5,
+        Icon::Pause => 8.0,
+        Icon::Prev | Icon::Next => 10.0,
+    };
+    units / 24.0 * size
+}
+
+/// An icon centred on `c`, answering clicks in a `HIT` square, with a soft circle under the pointer.
+fn icon_button(ui: &mut Ui, icon: Icon, c: Pos2, size: f32, enabled: bool) -> Response {
+    icon_button_sized(ui, icon, c, size, HIT, enabled)
+}
+
+fn icon_button_sized(
+    ui: &mut Ui,
+    icon: Icon,
+    c: Pos2,
+    size: f32,
+    hit: f32,
+    enabled: bool,
+) -> Response {
+    let hit = Rect::from_center_size(c, vec2(hit, hit));
+    let sense = if enabled {
+        Sense::click()
+    } else {
+        Sense::hover()
+    };
+    let r = ui.interact(hit, ui.id().with(("icon", icon as u8)), sense);
+    if enabled && r.hovered() {
+        ui.painter().circle_filled(c, hit.width() / 2.0, HOVER);
+    }
+    let color = if enabled { TEXT } else { DISABLED };
+    icon.image(color, size)
+        .paint_at(ui, Rect::from_center_size(c, vec2(size, size)));
+    r
+}
+
+/// Play or pause, or a spinner while the track resolves.
+fn play_button(ui: &mut Ui, s: &State, c: Pos2, size: f32, actions: &mut Vec<Action>) {
+    play_button_sized(ui, s, c, size, HIT, actions);
+}
+
+fn play_button_sized(
+    ui: &mut Ui,
+    s: &State,
+    c: Pos2,
+    size: f32,
+    hit: f32,
+    actions: &mut Vec<Action>,
+) {
+    if s.loading() {
+        egui::Spinner::new()
+            .size(size)
+            .color(TEXT)
+            .paint_at(ui, Rect::from_center_size(c, vec2(size, size)));
+        return;
+    }
+    let (icon, tip) = if s.queue.is_some() && !s.paused {
+        (Icon::Pause, "Pause (space)")
+    } else {
+        (Icon::Play, "Play (space)")
+    };
+    if icon_button_sized(ui, icon, c, size, hit, true)
+        .on_hover_text(tip)
+        .clicked()
+    {
+        actions.push(Action::Toggle);
+    }
+}
+
+/// The progress of the track, seekable. A `line` thick bar on `hit`'s top edge when `top`, else in its middle,
+/// twice as thick under the pointer. Seeks once it is let go, not on every step of a drag.
+fn seek(
+    ui: &mut Ui,
+    hit: Rect,
+    top: bool,
+    line: f32,
+    s: &State,
+    scrub: &mut Option<Scrub>,
+    actions: &mut Vec<Action>,
+) {
+    let r = ui.interact(hit, ui.id().with("seek"), Sense::click_and_drag());
     let dur = s.dur.unwrap_or(0.0);
     if dur > 0.0 {
-        if let Some(p) = resp.interact_pointer_pos() {
-            let frac = ((p.x - rect.left()) / rect.width()).clamp(0.0, 1.0) as f64;
+        if let Some(p) = r.interact_pointer_pos() {
+            let frac = ((p.x - hit.left()) / hit.width()).clamp(0.0, 1.0) as f64;
             *scrub = Some(Scrub {
                 to: frac * dur,
                 dragging: true,
                 at: Instant::now(),
             });
         }
-        if (resp.drag_stopped() || resp.clicked())
+        if (r.drag_stopped() || r.clicked())
             && let Some(sc) = scrub
         {
             sc.dragging = false;
@@ -417,119 +767,22 @@ fn seek_bar(ui: &mut egui::Ui, s: &State, scrub: &mut Option<Scrub>, actions: &m
     } else {
         0.0
     };
-    let thick = if resp.hovered() || resp.dragged() {
-        6.0
+    let live = dur > 0.0 && (r.hovered() || r.dragged());
+    let thick = if live { 2.0 * line } else { line };
+    let y = if top {
+        hit.top()
     } else {
-        3.0
+        hit.center().y - thick / 2.0
     };
-    let rail = Rect::from_center_size(rect.center(), vec2(rect.width(), thick));
+    let rail = Rect::from_min_size(pos2(hit.left(), y), vec2(hit.width(), thick));
     let mut done = rail;
     done.set_right(rail.left() + rail.width() * frac);
-    let v = ui.visuals();
-    ui.painter()
-        .rect_filled(rail, thick / 2.0, v.widgets.inactive.bg_fill);
-    ui.painter()
-        .rect_filled(done, thick / 2.0, v.selection.bg_fill);
+    let round = if top { 0.0 } else { thick / 2.0 };
+    ui.painter().rect_filled(rail, round, HAIRLINE);
+    ui.painter().rect_filled(done, round, ACCENT);
     if dur > 0.0 {
-        resp.on_hover_cursor(egui::CursorIcon::PointingHand);
+        r.on_hover_cursor(egui::CursorIcon::PointingHand);
     }
-}
-
-fn channel_list(
-    ui: &mut egui::Ui,
-    channels: &Option<Result<Vec<Channel>, String>>,
-    open: Option<&str>,
-    playing: Option<&str>,
-    actions: &mut Vec<Action>,
-) {
-    let list = match channels {
-        None => {
-            ui.spinner();
-            return;
-        }
-        Some(Err(e)) => {
-            ui.label(format!("Could not load channels: {e}"));
-            return;
-        }
-        Some(Ok(list)) => list,
-    };
-    rows(ui, list.len(), None, |ui, i| {
-        let c = &list[i];
-        // The playing channel stands out in bold; right_text keeps the name at the left.
-        let mut name = RichText::new(&c.name);
-        if playing == Some(&c.slug) {
-            name = name.strong();
-        }
-        let row = egui::Button::selectable(open == Some(&c.slug), name).right_text("");
-        if ui.add(row).clicked() {
-            actions.push(Action::Open(c.slug.clone(), c.name.clone()));
-        }
-    });
-}
-
-fn tracklist(
-    ui: &mut egui::Ui,
-    open: &Open,
-    tracks: &HashMap<String, Tracks>,
-    s: &State,
-    back: bool,
-    reveal: &mut bool,
-    actions: &mut Vec<Action>,
-) {
-    ui.horizontal(|ui| {
-        if back && back_button(ui).clicked() {
-            actions.push(Action::Back);
-        }
-        ui.add(egui::Label::new(RichText::new(&open.name).strong()).truncate());
-    });
-    let list = match tracks.get(&open.slug).and_then(|t| t.list.as_ref()) {
-        None => {
-            ui.spinner();
-            return;
-        }
-        Some(Err(e)) => {
-            ui.label(format!("Could not load tracks: {e}"));
-            return;
-        }
-        Some(Ok(list)) => list,
-    };
-    let current = s.index.filter(|_| s.queue.as_deref() == Some(&open.slug));
-    let target = current.filter(|_| std::mem::take(reveal));
-    rows(ui, list.len(), target, |ui, i| {
-        let row = egui::Button::selectable(current == Some(i), title(&list[i])).right_text("");
-        if ui.add(row).clicked() {
-            actions.push(Action::Play(i));
-        }
-    });
-}
-
-/// A list of `n` tall rows that only draws the visible ones, scrolled to centre `reveal` when given.
-fn rows(
-    ui: &mut egui::Ui,
-    n: usize,
-    reveal: Option<usize>,
-    mut row: impl FnMut(&mut egui::Ui, usize),
-) {
-    let stride = ROW + ui.spacing().item_spacing.y;
-    let mut area = egui::ScrollArea::vertical().auto_shrink(false);
-    if let Some(i) = reveal {
-        let top = i as f32 * stride - (ui.available_height() - stride) / 2.0;
-        area = area.vertical_scroll_offset(top.max(0.0));
-    }
-    area.show_rows(ui, ROW, n, |ui, range| {
-        for i in range {
-            ui.scope(|ui| {
-                ui.spacing_mut().interact_size.y = ROW;
-                ui.spacing_mut().button_padding.y =
-                    (ROW - ui.text_style_height(&egui::TextStyle::Button)) / 2.0;
-                ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
-                ui.set_width(ui.available_width());
-                ui.with_layout(egui::Layout::top_down_justified(egui::Align::Min), |ui| {
-                    row(ui, i)
-                });
-            });
-        }
-    });
 }
 
 /// Seconds as m:ss, or h:mm:ss for long mixes.
