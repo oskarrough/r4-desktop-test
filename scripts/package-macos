@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# Build a relocatable app bundle; requires brew install mpv dylibbundler.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+stage="$PWD/target/package-macos"
+app="$stage/Radio4000.app"
+rm -rf "$stage"
+mkdir -p "$app/Contents/MacOS" "$app/Contents/Frameworks"
+cp target/release/radio4000 "$app/Contents/MacOS/"
+cat >"$app/Contents/Info.plist" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>CFBundleName</key><string>Radio4000</string>
+<key>CFBundleIdentifier</key><string>org.radio4000.desktop</string>
+<key>CFBundleExecutable</key><string>radio4000</string>
+<key>CFBundlePackageType</key><string>APPL</string>
+<key>CFBundleVersion</key><string>1</string>
+<key>NSHighResolutionCapable</key><true/>
+</dict></plist>
+PLIST
+dylibbundler -od -b -x "$app/Contents/MacOS/radio4000" \
+    -d "$app/Contents/Frameworks" -p '@executable_path/../Frameworks/'
+mkdir -p "$app/Contents/Resources/licenses"
+# Homebrew keeps the licenses with each library's keg, not the linked dylib.
+for library in "$app/Contents/Frameworks/"*.dylib; do
+    name=$(basename "$library")
+    original=$(find "$(brew --cellar)" -name "$name" -type f -print -quit)
+    if [[ -n "$original" ]]; then
+        keg=${original%%/lib/*}
+        find "$keg" -maxdepth 1 -type f \( -iname '*license*' -o -iname '*copying*' \) \
+            -exec cp '{}' "$app/Contents/Resources/licenses/$name.txt" \;
+    fi
+done
+# Ad-hoc signing allows relocated dylibs on Apple silicon. Distribution signing can replace this.
+codesign --force --deep --sign - "$app"
+"$app/Contents/MacOS/radio4000" --version
+"$app/Contents/MacOS/radio4000" --check-playback
+tar -czf target/radio4000-macos-arm64.tar.gz -C "$stage" Radio4000.app

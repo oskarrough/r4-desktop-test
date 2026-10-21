@@ -1,0 +1,66 @@
+#!/usr/bin/env python3
+"""Exercise the Unix installer against the locally built Linux release, without GitHub."""
+import hashlib
+import os
+from pathlib import Path
+import subprocess
+import tempfile
+
+root = Path(__file__).resolve().parent.parent
+archive = root / "target/radio4000-linux-x86_64.tar.gz"
+with archive.open("rb") as file:
+    checksum = hashlib.file_digest(file, "sha256").hexdigest()
+
+with tempfile.TemporaryDirectory(prefix="radio4000 install, ") as directory:
+    directory = Path(directory)
+    commands = directory / "commands"
+    commands.mkdir()
+    sums = directory / "SHA256SUMS"
+    sums.write_text(f"{checksum}  {archive.name}\n")
+    curl = commands / "curl"
+    curl.write_text('''#!/bin/sh
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        -o) out="$2"; shift ;;
+        https:*) url="$1" ;;
+    esac
+    shift
+done
+case "$url" in
+    */SHA256SUMS) cp "$TEST_SUMS" "$out" ;;
+    *) cp "$TEST_ARCHIVE" "$out" ;;
+esac
+''')
+    curl.chmod(0o755)
+    env = {
+        **os.environ,
+        "PATH": str(commands) + os.pathsep + os.environ["PATH"],
+        "TEST_SUMS": str(sums),
+        "TEST_ARCHIVE": str(archive),
+        "RADIO4000_BIN_DIR": str(directory / "bin"),
+    }
+
+    def install():
+        return subprocess.run(["sh", str(root / "install.sh")], env=env, text=True, capture_output=True)
+
+    first = install()
+    assert first.returncode == 0, first.stdout + first.stderr
+    executable = directory / "bin/radio4000"
+    assert executable.is_symlink()
+    assert subprocess.check_output([str(executable), "--version"], text=True).startswith("radio4000 ")
+    target = executable.resolve()
+    assert (target.parent / "tools/yt-dlp").is_file()
+    assert (target.parent / "tools/deno").is_file()
+    leftover = target.parents[2].with_name(target.parents[2].name + ".old")
+    leftover.mkdir()
+    second = install()
+    assert second.returncode == 0, second.stdout + second.stderr
+    assert executable.resolve() == target
+    assert not leftover.exists()
+    sums.write_text(f"{'0' * 64}  {archive.name}\n")
+    rejected = install()
+    assert rejected.returncode != 0
+    assert "checksum mismatch" in rejected.stderr
+    assert executable.resolve() == target
+
+print("Installer: install, reinstall, leftover cleanup, spaces/commas, and failed-update preservation passed")

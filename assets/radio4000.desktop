@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Radio4000
+Comment=Play channels from Radio4000
+Exec=radio4000
+Icon=radio4000
+Categories=AudioVideo;Audio;Player;
+Terminal=false

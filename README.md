@@ -22,6 +22,24 @@ irm https://raw.githubusercontent.com/oskarrough/r4-desktop-test/main/install.ps
 
 Run the same line again to update.
 
+Linux downloads include everything needed to play on Ubuntu 24.04 or newer, and similar desktop systems. You can also download the [AppImage](https://github.com/oskarrough/r4-desktop-test/releases/download/latest/radio4000-x86_64.AppImage) directly.
+
+<details>
+<summary>Keep YouTube playback working</summary>
+
+On first launch Radio4000 downloads yt-dlp, about 40MB, so the first track takes a moment. After that yt-dlp checks for nightly fixes in the background, at most once a day. Reopen Radio4000 to use an update. If the download fails, it keeps the working copy.
+
+Running from source? Install [uv](https://docs.astral.sh/uv/getting-started/installation/), then run:
+
+```sh
+uv tool install --upgrade --prerelease allow 'yt-dlp[default]'
+uv tool update-shell
+```
+
+Restart your terminal afterwards. Run the first command again whenever you want to update.
+
+</details>
+
 <details>
 
 <summary>How to develop locally</summary>

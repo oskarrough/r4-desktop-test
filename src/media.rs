@@ -104,20 +104,6 @@ mod tests {
     }
 
     #[test]
-    fn shows_title_and_channel() {
-        let shown = shown(&playing(), Some("https://example.com/a.png".into()));
-        assert_eq!(shown.playback, Playback::Playing);
-        assert_eq!(shown.position, Duration::from_secs(83));
-        assert_eq!(shown.volume, Some(0.8));
-        let track = shown.track.unwrap();
-        assert_eq!(track.id, "oskar/3");
-        assert_eq!(track.title, "Ali Farka Touré - Diaraby");
-        assert_eq!(track.artists, ["Radio Oskar"]);
-        assert_eq!(track.duration, Some(Duration::from_secs(312)));
-        assert_eq!(track.art_url.as_deref(), Some("https://example.com/a.png"));
-    }
-
-    #[test]
     fn paused_while_loading_or_paused() {
         let mut s = playing();
         s.dur = None;

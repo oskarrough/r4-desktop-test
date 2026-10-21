@@ -44,17 +44,35 @@ expected="$(grep " \*\{0,1\}$asset\$" "$tmp/SHA256SUMS" | cut -d' ' -f1)"
 mkdir "$tmp/new"
 tar -xzf "$tmp/$asset" -C "$tmp/new"
 new="$tmp/new/radio4000"
+bundle=""
+entry=""
+if [ -f "$tmp/new/radio4000.AppImage" ]; then
+	chmod +x "$tmp/new/radio4000.AppImage"
+	# Extract once: no FUSE installation or extraction delay on every launch.
+	(cd "$tmp/new" && ./radio4000.AppImage --appimage-extract >/dev/null)
+	bundle="$tmp/new/squashfs-root"
+	entry="AppRun"
+	new="$bundle/$entry"
+elif [ -d "$tmp/new/Radio4000.app" ]; then
+	bundle="$tmp/new/Radio4000.app"
+	entry="Contents/MacOS/radio4000"
+	new="$bundle/$entry"
+fi
 
-# Check the runtime dependencies; install nothing.
+# Older releases did not bundle the dependencies. Keep their installer working too.
 missing_mpv=0
-if [ "$os" = Linux ]; then
+if [ -n "$bundle" ]; then
+	:
+elif [ "$os" = Linux ]; then
 	if ldd "$new" 2>/dev/null | grep -q 'libmpv.*not found'; then missing_mpv=1; fi
 else
 	brew_prefix="$(brew --prefix 2>/dev/null || echo /opt/homebrew)"
 	[ -e "$brew_prefix/lib/libmpv.2.dylib" ] || missing_mpv=1
 fi
 missing_ytdlp=0
-command -v yt-dlp >/dev/null 2>&1 || missing_ytdlp=1
+if [ -z "$bundle" ]; then
+	command -v yt-dlp >/dev/null 2>&1 || missing_ytdlp=1
+fi
 
 # Make sure the new binary runs before it replaces the old one. Without libmpv it can't
 # start at all, so then it's installed untried and the missing-deps line below says why.
@@ -76,9 +94,24 @@ if [ -x "$bin_dir/radio4000" ]; then
 fi
 
 mkdir -p "$bin_dir"
-# Move rather than copy over, so updating works while an old radio4000 is still playing.
-mv -f "$new" "$bin_dir/radio4000"
-chmod +x "$bin_dir/radio4000"
+if [ -n "$bundle" ]; then
+	# Swap whole folders. A copy that's still playing keeps its loaded libraries, and its
+	# helpers' paths now point into the new folder.
+	app="$bin_dir/.radio4000/$(basename "$bundle")"
+	mkdir -p "$bin_dir/.radio4000"
+	rm -rf "$app.new" "$app.old"
+	mv "$bundle" "$app.new"
+	if [ -e "$app" ]; then mv "$app" "$app.old"; fi
+	mv "$app.new" "$app"
+	rm -rf "$app.old"
+	# Resolve relative RADIO4000_BIN_DIR values before making the link.
+	app="$(cd "$app" && pwd)"
+	ln -sfn "$app/$entry" "$bin_dir/radio4000"
+else
+	# Move rather than copy over, so updating works while the old binary is playing.
+	mv -f "$new" "$bin_dir/radio4000"
+	chmod +x "$bin_dir/radio4000"
+fi
 if [ $missing_mpv = 1 ]; then
 	echo "Installed $bin_dir/radio4000"
 elif [ "$old_version" = "$new_version" ]; then

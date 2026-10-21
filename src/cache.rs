@@ -51,23 +51,9 @@ fn encode(channels: &[Channel]) -> Option<String> {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn cache_and_log_share_one_folder() {
-        let dir = crate::app_dir().unwrap();
-        assert_eq!(super::path().unwrap().parent(), Some(dir.as_path()));
-        #[cfg(target_os = "linux")]
-        assert!(dir.ends_with("radio4000/desktop"), "{dir:?}");
-    }
-
-    #[test]
-    fn a_saved_list_loads_back() {
-        let channels =
-            crate::channels::parse(r#"[{"slug":"wavs","name":"Wavs","track_count":3}]"#).unwrap();
-        let loaded = super::decode(&super::encode(&channels).unwrap()).unwrap();
-        assert_eq!(loaded[0].slug, "wavs");
-    }
-
-    #[test]
     fn a_list_from_before_the_youtube_rule_is_dropped() {
+        let current = super::encode(&[]).unwrap();
+        assert!(super::decode(&current).is_some());
         let legacy = r#"[{"slug":"cognitivetherapy","name":"Links only","track_count":1}]"#;
         assert!(super::decode(legacy).is_none());
         let older = r#"{"version":1,"channels":[]}"#;

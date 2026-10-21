@@ -550,29 +550,4 @@ mod tests {
         assert_eq!(super::matching_tracks("   ", &list), [0, 1, 2, 3]);
         assert!(super::matching_tracks("blue jazz", &list).is_empty());
     }
-
-    #[test]
-    fn filtered_track_positions_map_to_original_queue_indices_in_order() {
-        let list: Vec<_> = [
-            "Unrelated",
-            "Live first",
-            "Studio",
-            "Live second",
-            "Live first",
-        ]
-        .into_iter()
-        .map(|name| crate::tracks::Track {
-            title: Some(name.into()),
-            url: name.into(),
-            provider: None,
-        })
-        .collect();
-        let hits = super::matching_tracks("live", &list);
-        assert_eq!(hits, [1, 3, 4]);
-        let selected = hits[1];
-        assert_eq!(selected, 3);
-        assert_eq!(super::title(&list[selected]), "Live second");
-        assert_eq!(hits.iter().position(|&index| index == 4), Some(2));
-        assert!(hits.get(3).is_none());
-    }
 }

@@ -90,9 +90,4 @@
 	if ($env:RADIO4000_NO_MODIFY_PATH -ne '1' -and ($env:Path -split ';') -notcontains $binDir) {
 		$env:Path = "$env:Path".TrimEnd(';') + ";$binDir"
 	}
-
-	# libmpv ships in the zip; yt-dlp is the one thing to check. Install nothing.
-	if (-not (Get-Command yt-dlp -ErrorAction SilentlyContinue)) {
-		Write-Host "radio4000 needs yt-dlp to play. Run: winget install yt-dlp"
-	}
 }

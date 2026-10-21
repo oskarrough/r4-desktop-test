@@ -7,6 +7,7 @@ mod channels;
 mod demo;
 mod library;
 mod media;
+mod playback_tools;
 mod player;
 mod style;
 mod theme;
@@ -21,6 +22,12 @@ fn main() {
             "radio4000 {}",
             option_env!("RADIO4000_VERSION").unwrap_or("dev")
         );
+        return;
+    }
+    if url.as_deref() == Some("--check-playback") {
+        // Packaging smoke test: --version alone cannot detect an incompatible libmpv API.
+        let _mpv = player::mpv(&[]).expect("failed to initialize bundled playback");
+        println!("playback ready");
         return;
     }
     logging();

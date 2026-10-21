@@ -14,6 +14,7 @@ pub fn mpv(extra: &[(&str, &str)]) -> libmpv2::Result<Mpv> {
         init.set_option("vid", "no")?;
         init.set_option("ytdl", "yes")?;
         init.set_option("ytdl-format", "bestaudio/best")?;
+        crate::playback_tools::configure(&init)?;
         // A stalled stream fails and gets skipped after this many seconds, rather than mpv's default minute.
         init.set_option("network-timeout", "15")?;
         init.set_option("audio-client-name", "radio4000")?;

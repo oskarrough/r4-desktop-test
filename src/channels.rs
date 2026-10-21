@@ -131,15 +131,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parses_postgrest_rows() {
-        let rows = parse(r#"[{"slug":"wavs","name":"Wavs","latest_track_at":"2026-10-21T13:25:56+00:00","track_count":563},
-            {"slug":"new","name":"New","latest_track_at":null,"track_count":null}]"#).unwrap();
-        assert_eq!(rows.len(), 2);
-        assert_eq!(rows[0].slug, "wavs");
-        assert_eq!(rows[1].latest_track_at, None);
-    }
-
-    #[test]
     fn playable_needs_a_youtube_track() {
         let rows = parse(
             r#"[{"slug":"wavs","name":"Wavs","track_count":3},

@@ -908,9 +908,12 @@ mod tests {
             }]))
             .unwrap();
         app.poll_updates();
-        let until = Instant::now() + Duration::from_secs(3);
-        while Instant::now() < until {
-            std::thread::sleep(Duration::from_millis(50));
+        // The player runs commands in order, so once it reports this volume, every play sent before it has landed.
+        app.player.send(Command::Volume(42.0));
+        let start = Instant::now();
+        while app.player.state.volume != 42.0 {
+            assert!(start.elapsed().as_secs() < 10, "the player never answered");
+            std::thread::sleep(Duration::from_millis(10));
             app.poll_updates();
         }
         assert_eq!(

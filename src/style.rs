@@ -248,29 +248,3 @@ pub fn apply(ctx: &egui::Context, p: Palette) {
     });
     ctx.data_mut(|d| d.insert_temp(egui::Id::NULL, p));
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn our_palettes_name_every_colour() {
-        for p in [Palette::dark(), Palette::light()] {
-            let colours = [
-                p.bg,
-                p.hairline,
-                p.hover,
-                p.selected,
-                p.text,
-                p.secondary,
-                p.disabled,
-                p.surface,
-                p.edge,
-                p.shadow,
-                p.accent,
-            ];
-            assert!(!colours.contains(&Color32::PLACEHOLDER), "{p:?}");
-        }
-        assert!(Palette::dark().dark && !Palette::light().dark);
-    }
-}

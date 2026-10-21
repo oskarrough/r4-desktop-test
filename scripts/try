@@ -2,6 +2,7 @@
 # Run this checkout's build as its own copy on the Hyprland desktop, beside Oskar's player and other checkouts' runs.
 #
 #   scripts/try start [args]    build, launch, wait for the window; env such as RADIO4000_DEMO=list passes through
+#   RADIO4000_TRY_BIN=/path/to/AppRun scripts/try start [args]    test an existing packaged build instead
 #   scripts/try key <key> [mods]  send a key to this copy's window only (Down, Return, space, n, ...)
 #   scripts/try float [w h]     float it, at 280x420 unless told otherwise
 #   scripts/try shot <file.png> raise it and screenshot just its window
@@ -44,9 +45,13 @@ start)
 		echo "try: already running as pid $p; scripts/try close first" >&2
 		exit 1
 	fi
-	cargo build --quiet --manifest-path "$root/Cargo.toml"
+	if [[ -n ${RADIO4000_TRY_BIN:-} ]]; then
+		bin=$(realpath "$RADIO4000_TRY_BIN")
+	else
+		cargo build --quiet --manifest-path "$root/Cargo.toml"
+		bin="${CARGO_TARGET_DIR:-$root/target}/debug/radio4000"
+	fi
 	rm -f "$dir/pid"
-	bin="${CARGO_TARGET_DIR:-$root/target}/debug/radio4000"
 	XDG_CONFIG_HOME="$dir/xdg/config" XDG_CACHE_HOME="$dir/xdg/cache" XDG_STATE_HOME="$dir/xdg/state" \
 		RADIO4000_INSTANCE="$name" setsid bash -c 'echo $$ >"$0"; exec "$@"' "$dir/pid" "$bin" "$@" \
 		>"$dir/out.log" 2>&1 </dev/null &
