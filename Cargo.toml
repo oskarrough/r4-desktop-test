@@ -26,6 +26,7 @@ libmpv2-sys = "4.0.1"
 fastframe-shell = { git = "https://github.com/crmne/fastframe", tag = "v0.14.0" }
 fastframe-instance = { git = "https://github.com/crmne/fastframe", tag = "v0.14.0" }
 fastframe-file = { git = "https://github.com/crmne/fastframe", tag = "v0.14.0" }
+fastframe-now-playing = { git = "https://github.com/crmne/fastframe", tag = "v0.14.0" }
 
 
 [target.'cfg(target_os = "linux")'.dependencies]

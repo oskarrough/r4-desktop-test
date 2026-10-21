@@ -5,6 +5,7 @@ mod cache;
 mod channels;
 mod demo;
 mod gui;
+mod media;
 mod player;
 mod style;
 mod theme;

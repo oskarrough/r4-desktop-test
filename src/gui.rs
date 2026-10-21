@@ -1,6 +1,7 @@
 //! The window shown when the app opens without a URL: R4 channels, a channel's tracks, and what's playing.
 //! Small first: one view at a time with a transport along the bottom. With room, channels and tracks sit side by side.
 use crate::channels::{self, Channel};
+use crate::media::{self, NowPlaying};
 use crate::player::{self, Command, Player, State};
 use crate::style::*;
 use crate::tracks::{self, Track};
@@ -103,6 +104,13 @@ pub fn run() -> eframe::Result {
                 open: None,
                 now: false,
                 player: Player::spawn(&[], move || ctx.request_repaint()),
+                media: {
+                    let ctx = cc.egui_ctx.clone();
+                    NowPlaying::start(media::App::new("radio4000", "Radio4000"), move || {
+                        ctx.request_repaint()
+                    })
+                },
+                seek: None,
                 scrub: None,
                 volume: None,
                 scroll: Scroll::default(),
@@ -155,6 +163,10 @@ struct App {
     /// The now-playing view covers everything else.
     now: bool,
     player: Player,
+    /// Media keys in, and what's on out to the system's now-playing widget.
+    media: NowPlaying,
+    /// The last seek, until the widget has been told where it landed.
+    seek: Option<media::Seek>,
     scrub: Option<Scrub>,
     /// The volume last asked for, shown on the meter until it fades.
     volume: Option<Volume>,
@@ -264,6 +276,7 @@ impl eframe::App for App {
         self.receive();
         self.keys(ui.ctx());
         self.scrolling.apply(ui.ctx());
+        self.media(ui.ctx());
         let wide = ui.ctx().content_rect().width() >= WIDE;
         let state = &self.player.state;
         let playing = state.queue.as_deref();
@@ -429,6 +442,53 @@ impl App {
         });
     }
 
+    /// Turns what the media keys and the widget asked for into actions, and shows the widget what's on.
+    fn media(&mut self, ctx: &egui::Context) {
+        use media::Command as M;
+        let s = &self.player.state;
+        let loaded = s.queue.is_some();
+        for c in self.media.commands() {
+            let a = match c {
+                M::PlayPause => Action::Toggle,
+                M::Play if !loaded || s.paused => Action::Toggle,
+                M::Pause | M::Stop if loaded && !s.paused => Action::Toggle,
+                M::Next => Action::Send(Command::Next),
+                M::Previous => Action::Send(Command::Prev),
+                M::SeekBy(ms) => Action::Send(Command::SeekBy(ms as f64 / 1000.0)),
+                M::SetPosition { track_id, position }
+                    if media::track_id(s).as_ref() == Some(&track_id) =>
+                {
+                    Action::Send(Command::Seek(position.as_secs_f64()))
+                }
+                M::SetVolume(v) => {
+                    Action::Volume(v * 100.0 - self.volume.map_or(s.volume, |v| v.to))
+                }
+                M::Raise => {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                    continue;
+                }
+                M::Quit => {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    continue;
+                }
+                _ => continue,
+            };
+            self.actions.push(a);
+        }
+        let art = s
+            .queue
+            .as_deref()
+            .and_then(|q| avatar(&self.channels, q))
+            .map(|image| channels::avatar_url(image, 512));
+        self.media.update(media::shown(s, art));
+        if let Some(seek) = &self.seek
+            && seek.landed(s.pos)
+        {
+            self.media.seeked(Duration::from_secs_f64(s.pos.max(0.0)));
+            self.seek = None;
+        }
+    }
+
     fn act(&mut self, ctx: &egui::Context, a: Action) {
         match a {
             Action::Cursor(by) => {
@@ -535,7 +595,12 @@ impl App {
                 let i = self.player.state.index.unwrap_or(0) as isize + by;
                 self.play(i.max(0) as usize);
             }
-            Action::Send(c) => self.player.send(c),
+            Action::Send(c) => {
+                if let Some(seek) = media::Seek::new(&self.player.state, &c) {
+                    self.seek = Some(seek);
+                }
+                self.player.send(c);
+            }
         }
     }
 
