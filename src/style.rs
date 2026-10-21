@@ -22,8 +22,7 @@ const TYPEFACE: Typeface = Typeface::Quattro;
 /// The leading face's capital height, as a share of the font size.
 pub const CAP: f32 = TYPEFACE.cap();
 
-/// The colours, from `assets/themes`: one palette for dark and one for light, in the format
-/// fastframe-theme reads, so an Omarchy theme or a palette file can stand in for either.
+/// The colours, from `assets/themes`: one palette for dark and one for light.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Palette {
     pub dark: bool,
@@ -84,8 +83,7 @@ impl Palette {
         palette
     }
 
-    /// Sets a colour by its name in a palette file. Ours are named as fastframe-theme's,
-    /// so Omarchy and shared palettes fit; the ones we draw nothing with are taken and dropped.
+    /// Sets a colour by its name in a palette file, named as fastframe-theme's.
     fn set(&mut self, name: &str, color: Color32) -> bool {
         match name {
             "window" => self.bg = color,
@@ -99,30 +97,9 @@ impl Palette {
             "edge" => self.edge = color,
             "shadow" => self.shadow = color,
             "accent" => self.accent = color,
-            "panel" | "accent_hover" | "on_accent" | "danger" | "warning" | "overlay" => {}
             _ => return false,
         }
         true
-    }
-}
-
-impl fastframe_theme::Palette for Palette {
-    fn base(base: fastframe_theme::Base) -> Self {
-        match base {
-            fastframe_theme::Base::Dark => Self::dark(),
-            fastframe_theme::Base::Light => Self::light(),
-        }
-    }
-
-    fn set(&mut self, name: &str, color: Color32) -> bool {
-        Palette::set(self, name, color)
-    }
-
-    /// A palette without its own edge (Omarchy's, a shared one) rims what floats with its hairline.
-    fn derive(&mut self, given: &std::collections::BTreeSet<&str>) {
-        if given.contains("outline") && !given.contains("edge") {
-            self.edge = self.hairline;
-        }
     }
 }
 

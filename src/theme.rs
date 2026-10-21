@@ -1,12 +1,9 @@
-//! Which palette is up: Omarchy's live theme where the desktop has one, else ours for the system's light or dark.
+//! Which palette is up: ours for the system's light or dark.
 //! `RADIO4000_THEME=light|dark` fixes one, for screenshots.
 use crate::style::{self, Palette};
-use fastframe_theme::{Base, Catalog, DesktopThemes, Transition, Waker};
+use fastframe_theme::{Base, Transition};
 
 pub struct Theme {
-    catalog: Catalog<Palette>,
-    themes: Option<std::path::PathBuf>,
-    waker: Waker,
     fixed: Option<Base>,
     #[cfg(target_os = "linux")]
     appearance: Option<appearance::Appearance>,
@@ -22,25 +19,7 @@ impl Theme {
             Ok("dark") => Some(Base::Dark),
             _ => None,
         };
-        let repaint = ctx.clone();
-        let waker = Waker::new(move || repaint.request_repaint());
-        let mut catalog = Catalog::default();
-        let themes = (!demo)
-            .then(|| fastframe_dirs::Dirs::platform("", "", "radio4000"))
-            .flatten()
-            .map(|dirs| dirs.config.join("themes"));
-        if themes.is_some() {
-            catalog.enable_desktop_themes(DesktopThemes {
-                slug: "radio4000",
-                omarchy_template: include_str!("../contrib/omarchy/radio4000.json.tpl"),
-                omarchy_previous_templates: &[],
-                presets: false,
-            });
-        }
-        let mut theme = Self {
-            catalog,
-            themes,
-            waker,
+        Self {
             fixed,
             #[cfg(target_os = "linux")]
             appearance: (fixed.is_none() && !demo).then(|| {
@@ -49,23 +28,11 @@ impl Theme {
             }),
             applied: None,
             transition: Transition::default(),
-        };
-        theme.scan();
-        theme
-    }
-
-    fn scan(&mut self) {
-        if let Some(dir) = &self.themes {
-            self.catalog.start(dir.clone(), None, &self.waker);
         }
     }
 
-    /// Before drawing: take a changed palette, revealed from the middle as Omarchy does.
+    /// Before drawing: take a changed palette, revealed from the middle outwards.
     pub fn update(&mut self, ctx: &egui::Context) {
-        if self.catalog.needs_reload() {
-            self.scan();
-        }
-        self.catalog.poll();
         let wanted = self.wanted();
         if self.applied == Some(wanted) {
             return;
@@ -86,11 +53,6 @@ impl Theme {
     }
 
     fn wanted(&self) -> Palette {
-        if self.fixed.is_none()
-            && let Some(theme) = self.catalog.system_theme()
-        {
-            return theme.palette;
-        }
         // No answer, or no preference, stays dark: that's our look.
         #[cfg(target_os = "linux")]
         let dark = self

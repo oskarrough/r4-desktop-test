@@ -908,14 +908,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "fastframe-dirs"
-version = "0.14.0"
-source = "git+https://github.com/crmne/fastframe?tag=v0.14.0#dfd2db7bc6a5ae0c62a98383c84235f64da2cace"
-dependencies = [
- "directories",
-]
-
-[[package]]
 name = "fastframe-emoji"
 version = "0.14.0"
 source = "git+https://github.com/crmne/fastframe?tag=v0.14.0#dfd2db7bc6a5ae0c62a98383c84235f64da2cace"
@@ -2436,7 +2428,6 @@ dependencies = [
  "eframe",
  "egui",
  "egui_extras",
- "fastframe-dirs",
  "fastframe-emoji",
  "fastframe-fonts",
  "fastframe-icons",
