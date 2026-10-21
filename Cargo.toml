@@ -17,6 +17,7 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 fastframe-emoji = { git = "https://github.com/crmne/fastframe", tag = "v0.14.0" }
 fastframe-icons = { git = "https://github.com/crmne/fastframe", tag = "v0.14.0", version = "0.14.0" }
 fastframe-theme = { git = "https://github.com/crmne/fastframe", tag = "v0.14.0" }
+fastframe-scroll = { git = "https://github.com/crmne/fastframe", tag = "v0.14.0" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 zbus = { version = "5", default-features = false, features = ["blocking-api", "async-io"] }
