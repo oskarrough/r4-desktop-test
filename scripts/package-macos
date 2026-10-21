@@ -21,6 +21,17 @@ cat >"$app/Contents/Info.plist" <<'PLIST'
 PLIST
 dylibbundler -od -b -x "$app/Contents/MacOS/radio4000" \
     -d "$app/Contents/Frameworks" -p '@executable_path/../Frameworks/'
+# dylibbundler points every rpath at Frameworks, and dyld refuses a library that lists one twice.
+# libmpv's Swift rpaths collapse that way, so keep one and give back the system Swift runtime.
+for library in "$app/Contents/Frameworks/"*.dylib; do
+    rpaths=$(otool -l "$library" | grep -c 'path @executable_path/../Frameworks/ ' || true)
+    if ((rpaths > 1)); then
+        for ((i = 0; i < rpaths; i++)); do
+            install_name_tool -delete_rpath '@executable_path/../Frameworks/' "$library"
+        done
+        install_name_tool -add_rpath '@executable_path/../Frameworks/' -add_rpath /usr/lib/swift "$library"
+    fi
+done
 mkdir -p "$app/Contents/Resources/licenses"
 # Homebrew keeps the licenses with each library's keg, not the linked dylib.
 for library in "$app/Contents/Frameworks/"*.dylib; do
