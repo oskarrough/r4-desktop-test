@@ -11,7 +11,8 @@ permissions:
 
 concurrency:
   group: release-${{ github.ref }}
-  cancel-in-progress: true
+  # Never cancel on main: a run stopped between delete and create leaves no release.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build:
@@ -27,8 +28,9 @@ jobs:
             asset: radio4000-windows-x86_64.zip
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
 
       - name: Install libmpv (Linux)
         if: runner.os == 'Linux'
@@ -68,7 +70,7 @@ jobs:
         shell: pwsh
         run: Compress-Archive -Path target\release\radio4000.exe, mpv-dev\libmpv-2.dll -DestinationPath ${{ matrix.asset }}
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.asset }}
           path: ${{ matrix.asset }}
@@ -78,7 +80,7 @@ jobs:
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true
