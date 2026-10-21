@@ -3,7 +3,10 @@ name: Release
 on:
   push:
     branches: [main]
+    paths-ignore: ['**.md']
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths-ignore: ['**.md']
   workflow_dispatch:
 
 permissions:
@@ -11,11 +14,13 @@ permissions:
 
 concurrency:
   group: release-${{ github.ref }}
-  # Never cancel on main: a run stopped between delete and create leaves no release.
+  # Never cancel on main: a half-finished release would mix assets from two commits.
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build:
+    # Drafts are work in progress; build once marked ready.
+    if: ${{ !github.event.pull_request.draft }}
     strategy:
       fail-fast: false
       matrix:
@@ -31,10 +36,18 @@ jobs:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+        with:
+          # PRs can only read main's cache, so their saves just crowd it out.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Install libmpv (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libmpv-dev
+        run: |
+          # Skip rebuilding the man page index after install; it's most of the wait.
+          echo 'set man-db/auto-update false' | sudo debconf-communicate
+          sudo dpkg-reconfigure man-db
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libmpv-dev
 
       - name: Install libmpv (macOS)
         if: runner.os == 'macOS'
@@ -102,11 +115,18 @@ jobs:
           merge-multiple: true
       - name: Checksum the assets
         run: cd dist && sha256sum * > SHA256SUMS
-      - name: Replace the latest release
+      - name: Update the latest release
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
-          gh release delete latest --yes --cleanup-tag || true
-          gh release create latest dist/* --target "$GITHUB_SHA" --prerelease \
-            --title "Latest build" --notes "Built from $GITHUB_SHA on every push to main."
+          # Update in place so the download URLs never 404 mid-release.
+          notes="Built from $GITHUB_SHA on every push to main."
+          if gh release view latest > /dev/null 2>&1; then
+            gh api -X PATCH "repos/$GH_REPO/git/refs/tags/latest" -f sha="$GITHUB_SHA" -F force=true
+            gh release upload latest dist/* --clobber
+            gh release edit latest --notes "$notes"
+          else
+            gh release create latest dist/* --target "$GITHUB_SHA" --prerelease \
+              --title "Latest build" --notes "$notes"
+          fi
