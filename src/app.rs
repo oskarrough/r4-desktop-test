@@ -30,6 +30,8 @@ const WIDE: f32 = 560.0;
 const DRIFT: f32 = 0.3;
 /// How much it fades meanwhile.
 const DIM: f32 = 0.4;
+/// How dark the tracklist goes under the channel's details.
+const SCRIM: f32 = 0.4;
 
 pub fn run() -> eframe::Result {
     let demo = crate::demo::from_env();
@@ -381,7 +383,7 @@ impl eframe::App for App {
     }
 }
 
-/// Tracks stay underneath details; the caller draws the dock against the original pane afterwards.
+/// Details rise over the tracks; the caller draws the dock against the original pane afterwards.
 #[allow(clippy::too_many_arguments)]
 fn channel_pane(
     ui: &mut Ui,
@@ -397,47 +399,55 @@ fn channel_pane(
     actions: &mut Vec<Action>,
 ) {
     let rect = ui.max_rect();
-    let pal = palette(ui);
     let shown = transition.map_or(if show_info { 1.0 } else { 0.0 }, |s| s.shown());
     let mut ignored = Vec::new();
-    if !show_info || transition.is_some() {
-        let at = rect.translate(snap(ui, vec2(-DRIFT * shown * rect.width(), 0.0)));
-        let acts = if show_info {
-            &mut ignored
-        } else {
-            &mut *actions
-        };
-        ui.scope_builder(
-            egui::UiBuilder::new()
-                .max_rect(at)
-                .id_salt(("tracklist", &open.slug)),
-            |ui| {
-                ui.shrink_clip_rect(rect);
-                if show_info {
-                    let opacity = ui.painter().opacity();
-                    ui.disable();
-                    ui.set_opacity(opacity);
-                }
-                tracklist(
-                    ui,
-                    open,
-                    channel.and_then(|c| c.image.as_deref()),
-                    tracks,
-                    state,
-                    back,
-                    scroll,
-                    keyed && !show_info,
-                    acts,
-                );
-            },
-        );
-    }
+    let acts = if show_info {
+        &mut ignored
+    } else {
+        &mut *actions
+    };
+    ui.scope_builder(
+        egui::UiBuilder::new()
+            .max_rect(rect)
+            .id_salt(("tracklist", &open.slug)),
+        |ui| {
+            if show_info {
+                let opacity = ui.painter().opacity();
+                ui.disable();
+                ui.set_opacity(opacity);
+            }
+            tracklist(
+                ui,
+                open,
+                channel.and_then(|c| c.image.as_deref()),
+                tracks,
+                state,
+                back,
+                scroll,
+                keyed && !show_info,
+                acts,
+            );
+        },
+    );
     if show_info || transition.is_some() {
-        let at = rect.translate(snap(ui, vec2((1.0 - shown) * rect.width(), 0.0)));
+        // The tracklist darkens under the sheet; a click on it closes the sheet, and does nothing while it goes.
+        ui.painter().rect_filled(
+            rect,
+            0.0,
+            egui::Color32::from_black_alpha((SCRIM * shown * 255.0) as u8),
+        );
+        let scrim = ui.interact(
+            rect,
+            ui.id().with(("info-scrim", &open.slug)),
+            Sense::click_and_drag(),
+        );
+        if show_info && scrim.clicked() {
+            actions.push(Action::Info);
+        }
         let acts = if show_info { actions } else { &mut ignored };
         ui.scope_builder(
             egui::UiBuilder::new()
-                .max_rect(at)
+                .max_rect(rect)
                 .id_salt(("info", &open.slug)),
             |ui| {
                 ui.shrink_clip_rect(rect);
@@ -446,24 +456,9 @@ fn channel_pane(
                     ui.disable();
                     ui.set_opacity(opacity);
                 }
-                ui.painter().rect_filled(at, 0.0, pal.bg);
-                if shown < 1.0 {
-                    ui.painter().vline(
-                        at.left(),
-                        at.y_range(),
-                        egui::Stroke::new(1.0, pal.hairline),
-                    );
-                }
-                channel_info(ui, open, channel, acts);
+                channel_info(ui, open, channel, shown, acts);
             },
         );
-        if !show_info {
-            ui.interact(
-                at.intersect(rect).intersect(ui.clip_rect()),
-                ui.id().with(("closing-info-shield", &open.slug)),
-                Sense::click_and_drag(),
-            );
-        }
     }
 }
 

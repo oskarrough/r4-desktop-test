@@ -1,10 +1,10 @@
 //! Channel browsing, search, details, and track lists.
 use super::Action;
 use super::list::{ListScroll, Reveal, note, row, rows};
-use super::navigation::ChannelRef;
+use super::navigation::{ChannelRef, snap};
 use super::transport::DOCK;
 use super::widgets::{
-    ICON, Icon, KNOB, TOP, back, chrome, face, fade, fit, ink_width, knob, put, put_top,
+    ICON, Icon, KNOB, TOP, back, chrome, close, face, fade, fit, ink_width, knob, put, put_top,
 };
 use crate::channels::{self, Channel};
 use crate::player::State;
@@ -323,12 +323,13 @@ pub(super) fn open_page(ctx: &egui::Context, slug: &str) {
     )));
 }
 
-/// The open channel's details, over its tracklist: its face, name and figures, its own words, and a link to its
-/// page, centred in the room between the top band and the mini player, scrolling when the words run long.
+/// The open channel's details in a sheet `risen` part of the way over its tracklist: its face, name and figures,
+/// its own words, and a link to its page. The sheet is as tall as that, short of the top band, scrolling beyond.
 pub(super) fn channel_info(
     ui: &mut Ui,
     open: &ChannelRef,
     channel: Option<&Channel>,
+    risen: f32,
     actions: &mut Vec<Action>,
 ) {
     let pal = palette(ui);
@@ -395,74 +396,94 @@ pub(super) fn channel_info(
     let words = body.as_ref().map_or(0.0, |b| b.size().y + gap);
     let height = side + 4.0 * UNIT + name.size().y + gap + figures + words + link.size().y;
     let room = DOCK + 6.0 * UNIT;
+    // The face sits level with the close button.
+    let head = 2.0 * UNIT;
+    let full = (head + height + room).min(rect.height() - TOP);
+    let sheet = Rect::from_min_max(pos2(rect.left(), rect.bottom() - full), rect.max)
+        .translate(snap(ui, vec2(0.0, (1.0 - risen) * full)));
+    let corner = (4.0 * UNIT) as u8;
+    ui.painter().rect(
+        sheet,
+        egui::CornerRadius {
+            nw: corner,
+            ne: corner,
+            sw: 0,
+            se: 0,
+        },
+        pal.bg,
+        egui::Stroke::new(1.0, pal.edge),
+        egui::StrokeKind::Inside,
+    );
+    // Clicks on the sheet stay on it, rather than closing it from the scrim beneath.
+    ui.interact(sheet, ui.id().with("sheet"), Sense::click_and_drag());
 
-    egui::ScrollArea::vertical()
-        .auto_shrink(false)
-        .show(ui, |ui| {
-            let inner = ui.max_rect();
-            let free = rect.height() - TOP - room;
-            let mut y = inner.top() + TOP + ((free - height) / 2.0).max(0.0);
-            y = (y / UNIT).round() * UNIT;
-            ui.set_height(y - inner.top() + height + room);
-            let cx = inner.center().x.round();
+    ui.scope_builder(egui::UiBuilder::new().max_rect(sheet), |ui| {
+        ui.shrink_clip_rect(sheet.shrink(1.0));
+        egui::ScrollArea::vertical()
+            .auto_shrink(false)
+            .show(ui, |ui| {
+                let inner = ui.max_rect();
+                let mut y = inner.top() + head;
+                ui.set_height(head + height + room);
+                let cx = inner.center().x.round();
 
-            face(
-                ui,
-                Rect::from_min_size(pos2(cx - side / 2.0, y), vec2(side, side)),
-                channel.and_then(|c| c.image.as_deref()),
-                &open.name,
-            );
-            y += side + 4.0 * UNIT;
-            put_top(ui, name.clone(), cx - ink_width(&name) / 2.0, y);
-            y += name.size().y + gap;
+                face(
+                    ui,
+                    Rect::from_min_size(pos2(cx - side / 2.0, y), vec2(side, side)),
+                    channel.and_then(|c| c.image.as_deref()),
+                    &open.name,
+                );
+                y += side + 4.0 * UNIT;
+                put_top(ui, name.clone(), cx - ink_width(&name) / 2.0, y);
+                y += name.size().y + gap;
 
-            if !stats.is_empty() {
-                // Columns sharing the room evenly, at most 96 wide, the group centred.
-                let col = column(stats.len());
-                let left = cx - col * stats.len() as f32 / 2.0;
-                for (i, (figure, label)) in stats.iter().enumerate() {
-                    let mid = left + col * (i as f32 + 0.5);
-                    put(
-                        ui,
-                        figure.clone(),
-                        mid - ink_width(figure) / 2.0,
-                        y + 2.0 * UNIT,
-                    );
-                    put(
-                        ui,
-                        label.clone(),
-                        mid - ink_width(label) / 2.0,
-                        y + 6.0 * UNIT,
-                    );
+                if !stats.is_empty() {
+                    // Columns sharing the room evenly, at most 96 wide, the group centred.
+                    let col = column(stats.len());
+                    let left = cx - col * stats.len() as f32 / 2.0;
+                    for (i, (figure, label)) in stats.iter().enumerate() {
+                        let mid = left + col * (i as f32 + 0.5);
+                        put(
+                            ui,
+                            figure.clone(),
+                            mid - ink_width(figure) / 2.0,
+                            y + 2.0 * UNIT,
+                        );
+                        put(
+                            ui,
+                            label.clone(),
+                            mid - ink_width(label) / 2.0,
+                            y + 6.0 * UNIT,
+                        );
+                    }
+                    y += figures;
                 }
-                y += figures;
-            }
 
-            if let Some(b) = &body {
-                ui.painter().galley(pos2(cx, y), b.clone(), pal.text);
-                y += words;
-            }
+                if let Some(b) = &body {
+                    ui.painter().galley(pos2(cx, y), b.clone(), pal.text);
+                    y += words;
+                }
 
-            let at = put_top(ui, link.clone(), cx - ink_width(&link) / 2.0, y);
-            let r = ui
-                .interact(at, ui.id().with("page"), Sense::click())
-                .on_hover_cursor(egui::CursorIcon::PointingHand);
-            if r.hovered() {
-                let under = (at.bottom() - 1.0).round();
-                ui.painter()
-                    .hline(at.x_range(), under, egui::Stroke::new(1.0, pal.accent));
-            }
-            if r.clicked() {
-                open_page(ui.ctx(), &open.slug);
-            }
-        });
+                let at = put_top(ui, link.clone(), cx - ink_width(&link) / 2.0, y);
+                let r = ui
+                    .interact(at, ui.id().with("page"), Sense::click())
+                    .on_hover_cursor(egui::CursorIcon::PointingHand);
+                if r.hovered() {
+                    let under = (at.bottom() - 1.0).round();
+                    ui.painter()
+                        .hline(at.x_range(), under, egui::Stroke::new(1.0, pal.accent));
+                }
+                if r.clicked() {
+                    open_page(ui.ctx(), &open.slug);
+                }
+            });
+    });
 
-    fade(ui, rect);
-    back(
+    close(
         ui,
         pos2(
-            rect.left() + 2.0 * UNIT + KNOB / 2.0,
-            rect.top() + 2.0 * UNIT + KNOB / 2.0,
+            sheet.left() + 2.0 * UNIT + KNOB / 2.0,
+            sheet.top() + 2.0 * UNIT + KNOB / 2.0,
         ),
         actions,
     );
