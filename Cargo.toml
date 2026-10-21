@@ -18,6 +18,11 @@ fastframe-emoji = { git = "https://github.com/crmne/fastframe", tag = "v0.14.0" 
 fastframe-icons = { git = "https://github.com/crmne/fastframe", tag = "v0.14.0", version = "0.14.0" }
 fastframe-theme = { git = "https://github.com/crmne/fastframe", tag = "v0.14.0" }
 fastframe-scroll = { git = "https://github.com/crmne/fastframe", tag = "v0.14.0" }
+fastframe-log = { git = "https://github.com/crmne/fastframe", tag = "v0.14.0" }
+fastframe-dirs = { git = "https://github.com/crmne/fastframe", tag = "v0.14.0" }
+log = "0.4"
+# mpv_request_log_messages, which libmpv2 doesn't wrap.
+libmpv2-sys = "4.0.1"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 zbus = { version = "5", default-features = false, features = ["blocking-api", "async-io"] }

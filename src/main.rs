@@ -11,14 +11,8 @@ mod theme;
 mod tracks;
 
 fn main() {
-    let Some(url) = std::env::args().nth(1) else {
-        if let Err(e) = gui::run() {
-            eprintln!("radio4000: {e}");
-            std::process::exit(1);
-        }
-        return;
-    };
-    if url == "--version" || url == "-V" {
+    let url = std::env::args().nth(1);
+    if matches!(url.as_deref(), Some("--version" | "-V")) {
         // Release builds bake in latest-<sha>; see .github/workflows/release.yml.
         println!(
             "radio4000 {}",
@@ -26,19 +20,30 @@ fn main() {
         );
         return;
     }
-
+    logging();
+    let Some(url) = url else {
+        if let Err(e) = gui::run() {
+            eprintln!("radio4000: {e}");
+            std::process::exit(1);
+        }
+        return;
+    };
     let mpv = player::mpv(&[]).expect("failed to create mpv");
 
     mpv.command("loadfile", &[&url]).expect("loadfile failed");
 
     // Ctrl-C needs no handling: libmpv leaves SIGINT alone, so the process just dies.
     loop {
-        match mpv.wait_event(-1.0) {
-            Some(Ok(Event::FileLoaded)) => {
+        let Some(event) = mpv.wait_event(-1.0) else {
+            continue;
+        };
+        player::log_event(&mpv, &event);
+        match event {
+            Ok(Event::FileLoaded) => {
                 let title: String = mpv.get_property("media-title").unwrap_or_default();
                 println!("playing: {title}");
             }
-            Some(Ok(Event::EndFile(reason))) => {
+            Ok(Event::EndFile(reason)) => {
                 let reason = match reason {
                     0 => "eof",
                     2 => "stop",
@@ -50,13 +55,27 @@ fn main() {
                 println!("ended: {reason}");
                 std::process::exit(if reason == "error" { 1 } else { 0 });
             }
-            Some(Ok(Event::Shutdown)) => break,
+            Ok(Event::Shutdown) => break,
             // libmpv2 reports a failed end-file as Err, dropping the event itself.
-            Some(Err(e)) => {
+            Err(e) => {
                 println!("ended: error ({e})");
                 std::process::exit(1);
             }
             _ => {}
         }
     }
+}
+
+/// Logs to stderr and, unless it's a demo, to a file made fresh each run: `~/.local/state/radio4000/radio4000.log` on Linux.
+fn logging() {
+    let version = option_env!("RADIO4000_VERSION").unwrap_or("dev");
+    let mut logging =
+        fastframe_log::Logging::new("radio4000", version).filter("warn,radio4000=info");
+    let dirs = fastframe_dirs::Dirs::platform("org", "radio4000", "radio4000");
+    if let Some(dirs) = dirs.filter(|_| demo::from_env().is_none()) {
+        logging = logging
+            .file(dirs.state.join("radio4000.log"))
+            .panic_log(dirs.state.join("panic.log"));
+    }
+    let _ = logging.init();
 }
