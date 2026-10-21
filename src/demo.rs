@@ -1,5 +1,5 @@
 //! Fixed channels, tracks and a playing track, for screenshots that look the same every time.
-//! `RADIO4000_DEMO=list|tracks|info|now|volume|idle radio4000` opens on that view, with no network and a player that stands still.
+//! `RADIO4000_DEMO=list|tracks|info|now|volume|search|idle radio4000` opens on that view, with no network and a player that stands still.
 use crate::channels::Channel;
 use crate::player::State;
 use crate::tracks::Track;
@@ -16,6 +16,8 @@ pub struct Demo {
     pub now: bool,
     /// Hold the volume meter up, as if the volume just changed.
     pub volume: bool,
+    /// Open on the search panel.
+    pub search: bool,
 }
 
 pub fn from_env() -> Option<Demo> {
@@ -119,5 +121,6 @@ pub fn from_env() -> Option<Demo> {
         info: view == "info",
         now: matches!(view.as_str(), "now" | "volume"),
         volume: view == "volume",
+        search: view == "search",
     })
 }
