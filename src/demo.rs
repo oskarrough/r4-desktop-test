@@ -1,5 +1,5 @@
 //! Fixed channels, tracks and a playing track, for screenshots that look the same every time.
-//! `RADIO4000_DEMO=list|tracks|now|volume|idle radio4000` opens on that view, with no network and a player that stands still.
+//! `RADIO4000_DEMO=list|tracks|info|now|volume|idle radio4000` opens on that view, with no network and a player that stands still.
 use crate::channels::Channel;
 use crate::player::State;
 use crate::tracks::Track;
@@ -10,6 +10,8 @@ pub struct Demo {
     pub state: State,
     /// Open on the tracklist.
     pub open: bool,
+    /// Open on the channel's details.
+    pub info: bool,
     /// Open on the now-playing view.
     pub now: bool,
     /// Hold the volume meter up, as if the volume just changed.
@@ -32,8 +34,17 @@ pub fn from_env() -> Option<Demo> {
             "belleville" => Some("fp4diwnoof0f8g4rllpb".into()),
             _ => None,
         },
+        description: None,
+        created_at: None,
         latest_track_at: None,
         track_count: None,
+    };
+    let oskar = Channel {
+        description: Some("The channel of your wet dreams, an ode to perfume — for optimal peace and pleasure, shuffle this radio.".into()),
+        created_at: Some("2014-09-20T11:49:05.028+00:00".into()),
+        latest_track_at: Some("2026-10-18T12:13:18.205246+00:00".into()),
+        track_count: Some(2648),
+        ..channel("oskar", "Radio Oskar")
     };
     let track = |title: &str| Track {
         title: Some(title.into()),
@@ -57,7 +68,7 @@ pub fn from_env() -> Option<Demo> {
             channel("wavs", "Wavs Channel"),
             channel("comballar", "comballar"),
             channel("ko002", "ko002"),
-            channel("oskar", "Radio Oskar"),
+            oskar,
             channel("belleville", "Radio Belleville"),
             channel("sempre", "SEMPRELIGADO FM 📻"),
             channel("zero", "Zer0's Radio Part II"),
@@ -104,7 +115,8 @@ pub fn from_env() -> Option<Demo> {
         } else {
             state
         },
-        open: matches!(view.as_str(), "tracks" | "now" | "volume"),
+        open: matches!(view.as_str(), "tracks" | "info" | "now" | "volume"),
+        info: view == "info",
         now: matches!(view.as_str(), "now" | "volume"),
         volume: view == "volume",
     })
