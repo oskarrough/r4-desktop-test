@@ -9,6 +9,7 @@ mod player;
 mod style;
 mod theme;
 mod tracks;
+mod window;
 
 fn main() {
     let url = std::env::args().nth(1);

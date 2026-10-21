@@ -1053,6 +1053,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "fastframe-file"
+version = "0.14.0"
+source = "git+https://github.com/crmne/fastframe?tag=v0.14.0#dfd2db7bc6a5ae0c62a98383c84235f64da2cace"
+dependencies = [
+ "log",
+ "windows-sys 0.60.2",
+]
+
+[[package]]
 name = "fastframe-fonts"
 version = "0.14.0"
 source = "git+https://github.com/crmne/fastframe?tag=v0.14.0#dfd2db7bc6a5ae0c62a98383c84235f64da2cace"
@@ -1074,6 +1083,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "fastframe-instance"
+version = "0.14.0"
+source = "git+https://github.com/crmne/fastframe?tag=v0.14.0#dfd2db7bc6a5ae0c62a98383c84235f64da2cace"
+dependencies = [
+ "directories",
+ "getrandom 0.4.3",
+ "log",
+]
+
+[[package]]
 name = "fastframe-log"
 version = "0.14.0"
 source = "git+https://github.com/crmne/fastframe?tag=v0.14.0#dfd2db7bc6a5ae0c62a98383c84235f64da2cace"
@@ -1089,6 +1108,22 @@ version = "0.14.0"
 source = "git+https://github.com/crmne/fastframe?tag=v0.14.0#dfd2db7bc6a5ae0c62a98383c84235f64da2cace"
 dependencies = [
  "egui",
+]
+
+[[package]]
+name = "fastframe-shell"
+version = "0.14.0"
+source = "git+https://github.com/crmne/fastframe?tag=v0.14.0#dfd2db7bc6a5ae0c62a98383c84235f64da2cace"
+dependencies = [
+ "eframe",
+ "egui",
+ "fastframe-file",
+ "log",
+ "objc2 0.6.5",
+ "objc2-app-kit 0.3.2",
+ "objc2-foundation 0.3.2",
+ "serde_json",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -2641,10 +2676,13 @@ dependencies = [
  "egui_extras",
  "fastframe-dirs",
  "fastframe-emoji",
+ "fastframe-file",
  "fastframe-fonts",
  "fastframe-icons",
+ "fastframe-instance",
  "fastframe-log",
  "fastframe-scroll",
+ "fastframe-shell",
  "fastframe-text",
  "fastframe-theme",
  "image",
