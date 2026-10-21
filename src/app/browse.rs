@@ -9,7 +9,7 @@ use super::widgets::{
 use crate::channels::{self, Channel};
 use crate::player::State;
 use crate::style::{BODY, LARGE, MARGIN, SMALL, UNIT, font, palette};
-use crate::tracks::Track;
+use crate::tracks::{self, Track};
 use egui::text::LayoutJob;
 use egui::{Rect, Sense, Ui, pos2, vec2};
 use fastframe_fonts::Weight;
@@ -18,6 +18,8 @@ use fastframe_fonts::Weight;
 pub(super) enum SearchTarget {
     Channels,
     Tracks(ChannelRef),
+    /// The channel's tags, picking one narrows the channel to it, on top of what it's narrowed to already.
+    Tags(ChannelRef),
 }
 
 /// The query and its independent result-list scroll and cursor.
@@ -41,6 +43,54 @@ impl Search {
 
 pub(super) fn title(t: &Track) -> &str {
     t.title.as_deref().unwrap_or(&t.url)
+}
+
+/// What the channel wrote about a track, on one line, if anything.
+pub(super) fn description(t: &Track) -> Option<String> {
+    let d = t
+        .description
+        .as_deref()?
+        .split_whitespace()
+        .collect::<Vec<_>>();
+    (!d.is_empty()).then(|| d.join(" "))
+}
+
+/// The tracks a channel shows: all of them, or those matching `filter`, as indices into its list.
+pub(super) fn shown_tracks(list: &[Track], filter: Option<&str>) -> Vec<usize> {
+    match filter {
+        Some(filter) => matching_tracks(filter, list),
+        None => (0..list.len()).collect(),
+    }
+}
+
+/// The tags among what the channel shows, but those already filtered by, holding every word typed,
+/// a leading # or not, most used first.
+pub(super) fn matching_tags<'a>(
+    query: &str,
+    list: &'a [Track],
+    filter: Option<&str>,
+) -> Vec<(&'a str, usize)> {
+    let query = query.to_lowercase();
+    let words: Vec<_> = query
+        .split_whitespace()
+        .map(|w| w.trim_start_matches('#'))
+        .collect();
+    let taken = filter.map(tag_words).unwrap_or_default();
+    let shown = shown_tracks(list, filter);
+    tracks::tags(shown.iter().map(|&i| &list[i]))
+        .into_iter()
+        .filter(|(tag, _)| !taken.iter().any(|t| t == tag) && words.iter().all(|w| tag.contains(w)))
+        .collect()
+}
+
+/// The tags asked for in a query: its words that start with #.
+fn tag_words(query: &str) -> Vec<String> {
+    query
+        .split_whitespace()
+        .filter_map(|w| w.strip_prefix('#'))
+        .filter(|t| !t.is_empty())
+        .map(str::to_lowercase)
+        .collect()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -95,6 +145,7 @@ fn channel_row(
     let (r, play) = row(
         ui,
         &c.name,
+        None,
         Some(c.image.as_deref()),
         selected,
         playing == Some(&c.slug),
@@ -115,6 +166,7 @@ pub(super) fn search_panel(
     search: &mut Search,
     channels: Option<Result<&[Channel], &str>>,
     tracks: Option<Result<&[Track], &str>>,
+    filter: Option<&str>,
     state: &State,
     actions: &mut Vec<Action>,
 ) {
@@ -162,6 +214,7 @@ pub(super) fn search_panel(
                         if row(
                             ui,
                             title(&list[index]),
+                            description(&list[index]).as_deref(),
                             None,
                             cursor == i,
                             current == Some(index),
@@ -171,6 +224,43 @@ pub(super) fn search_panel(
                         .clicked()
                         {
                             actions.push(Action::PlayTrack(open.clone(), index));
+                        }
+                    });
+                }
+            }
+        },
+        SearchTarget::Tags(open) => match tracks {
+            None => note(ui, "Loading…"),
+            Some(Err(e)) => note(ui, &format!("Could not load tracks: {e}")),
+            Some(Ok(list)) => {
+                let hits = matching_tags(&search.query, list, filter);
+                if hits.is_empty() {
+                    note(ui, "No tags match.");
+                } else {
+                    search.scroll.cursor = search.scroll.cursor.min(hits.len() - 1);
+                    let cursor = search.scroll.cursor;
+                    // The tag playing on its own carries the dot.
+                    let playing = state
+                        .filter
+                        .as_deref()
+                        .filter(|_| state.queue.as_deref() == Some(&open.slug))
+                        .and_then(|f| f.strip_prefix('#'))
+                        .filter(|f| !f.contains(char::is_whitespace));
+                    rows(ui, hits.len(), None, &mut search.scroll, |ui, i| {
+                        let (tag, count) = hits[i];
+                        if row(
+                            ui,
+                            &format!("#{tag}"),
+                            Some(&count.to_string()),
+                            None,
+                            cursor == i,
+                            playing == Some(tag),
+                            true,
+                        )
+                        .0
+                        .clicked()
+                        {
+                            actions.push(Action::Tag(tag.to_owned()));
                         }
                     });
                 }
@@ -204,6 +294,7 @@ pub(super) fn search_panel(
     let hint = match &search.target {
         SearchTarget::Channels => "Search channels",
         SearchTarget::Tracks(_) => "Search tracks",
+        SearchTarget::Tags(_) => "Find a tag",
     };
     let edit = egui::TextEdit::singleline(&mut search.query)
         .frame(egui::Frame::NONE)
@@ -262,15 +353,26 @@ pub(super) fn matching(query: &str, list: &[Channel]) -> Vec<usize> {
 }
 
 /// Track matches keep their original queue indices and ordering, including URL fallback titles.
+/// Words are looked for in the description too; a word starting with # asks for that tag exactly.
 pub(super) fn matching_tracks(query: &str, tracks: &[Track]) -> Vec<usize> {
     let query = query.to_lowercase();
-    let words: Vec<_> = query.split_whitespace().collect();
+    let tags = tag_words(&query);
+    let words: Vec<_> = query
+        .split_whitespace()
+        .filter(|w| !w.starts_with('#'))
+        .collect();
     tracks
         .iter()
         .enumerate()
         .filter_map(|(i, track)| {
-            let name = title(track).to_lowercase();
-            words.iter().all(|word| name.contains(word)).then_some(i)
+            let name = format!(
+                "{} {}",
+                title(track),
+                track.description.as_deref().unwrap_or("")
+            )
+            .to_lowercase();
+            (tags.iter().all(|t| track.tagged(t)) && words.iter().all(|word| name.contains(word)))
+                .then_some(i)
         })
         .collect()
 }
@@ -281,6 +383,7 @@ pub(super) fn tracklist(
     open: &ChannelRef,
     image: Option<&str>,
     tracks: Option<Result<&[Track], &str>>,
+    tag: Option<&str>,
     s: &State,
     back: Option<f32>,
     scroll: &mut ListScroll,
@@ -288,17 +391,25 @@ pub(super) fn tracklist(
     actions: &mut Vec<Action>,
 ) {
     let rect = ui.max_rect();
+    let mut tagged = false;
     match tracks {
         None => note(ui, "Loading…"),
         Some(Err(e)) => note(ui, &format!("Could not load tracks: {e}")),
         Some(Ok(list)) => {
-            let current = s.index.filter(|_| s.queue.as_deref() == Some(&open.slug));
+            tagged = list.iter().any(|t| !t.tags.is_empty());
+            let shown = shown_tracks(list, tag);
+            let current = s
+                .index
+                .filter(|_| s.queue.as_deref() == Some(&open.slug))
+                .and_then(|i| shown.iter().position(|&j| j == i));
             let cursor = keyed.then_some(scroll.cursor);
-            rows(ui, list.len(), current, scroll, |ui, i| {
+            rows(ui, shown.len(), current, scroll, |ui, i| {
+                let track = &list[shown[i]];
                 let selected = cursor == Some(i);
                 if row(
                     ui,
-                    title(&list[i]),
+                    title(track),
+                    description(track).as_deref(),
                     None,
                     selected,
                     current == Some(i),
@@ -307,12 +418,12 @@ pub(super) fn tracklist(
                 .0
                 .clicked()
                 {
-                    actions.push(Action::Play(i));
+                    actions.push(Action::Play(shown[i]));
                 }
             });
         }
     }
-    chrome(ui, rect, open, image, back, actions);
+    chrome(ui, rect, open, image, tag, tagged, back, actions);
 }
 
 /// The channel's page on radio4000.com, in the browser.
@@ -535,6 +646,7 @@ mod tests {
             title: title.map(str::to_owned),
             url: url.into(),
             provider: None,
+            ..Default::default()
         };
         let list = [
             track(Some("Blue Train — live"), "https://example.com/one"),
@@ -549,5 +661,35 @@ mod tests {
         assert_eq!(super::matching_tracks("train", &list), [0, 2]);
         assert_eq!(super::matching_tracks("   ", &list), [0, 1, 2, 3]);
         assert!(super::matching_tracks("blue jazz", &list).is_empty());
+    }
+
+    #[test]
+    fn tags_and_words_mix_in_one_query() {
+        let track = |title: &str, description: &str, tags: &[&str]| crate::tracks::Track {
+            title: Some(title.into()),
+            description: Some(description.into()),
+            tags: tags.iter().map(|t| t.to_string()).collect(),
+            ..Default::default()
+        };
+        let list = [
+            track("King Tubby – Dub", "#dub #roots", &["dub", "roots"]),
+            track("Basic Channel – Phylyps", "#dubstep heavy", &["dubstep"]),
+            track("Augustus Pablo – East", "#dub house party", &["dub"]),
+            track("Moodymann – Shades", "#house", &["house"]),
+        ];
+        // A # word is that tag exactly, other words look in titles and descriptions.
+        assert_eq!(super::matching_tracks("#dub", &list), [0, 2]);
+        assert_eq!(super::matching_tracks("#DUB party", &list), [2]);
+        assert_eq!(super::matching_tracks("#dub #roots", &list), [0]);
+        assert_eq!(super::shown_tracks(&list, None), [0, 1, 2, 3]);
+        // Tags offered on a narrowed channel count only what it shows, and leave out what's already asked for.
+        assert_eq!(
+            super::matching_tags("", &list, Some("#dub")),
+            [("roots", 1)]
+        );
+        assert_eq!(
+            super::matching_tags("#du", &list, None),
+            [("dub", 2), ("dubstep", 1)]
+        );
     }
 }

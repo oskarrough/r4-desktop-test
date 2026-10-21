@@ -54,17 +54,21 @@ pub fn log_event(mpv: &Mpv, event: &libmpv2::Result<Event>) {
     }
 }
 
+#[derive(Clone)]
 pub struct Track {
     pub url: String,
     pub title: String,
 }
 
 pub enum Command {
-    /// Replace the playlist with `tracks` in shuffled order unless `queue` is already loaded, then start at `index`.
+    /// Replace the playlist with the `pool` of `tracks` in shuffled order unless `queue` and `filter` are already loaded,
+    /// then start at `index`. A filtered channel pools only its matches; indices stay the channel's.
     Play {
         queue: String,
+        filter: Option<String>,
         channel: String,
         tracks: Vec<Track>,
+        pool: Vec<usize>,
         index: usize,
     },
     Toggle,
@@ -84,6 +88,8 @@ pub enum Command {
 pub struct State {
     /// Slug of the loaded channel.
     pub queue: Option<String>,
+    /// What the loaded channel is narrowed to, as typed: `#dub house`.
+    pub filter: Option<String>,
     pub channel: String,
     /// Position of the current track in the channel's tracklist.
     pub index: Option<usize>,
@@ -101,6 +107,14 @@ pub struct State {
 impl State {
     pub fn loading(&self) -> bool {
         self.index.is_some() && self.dur.is_none()
+    }
+
+    /// The channel's name, and its filter when only its matches are playing.
+    pub fn station(&self) -> String {
+        match &self.filter {
+            Some(filter) => format!("{} · {filter}", self.channel),
+            None => self.channel.clone(),
+        }
     }
 }
 
@@ -188,19 +202,27 @@ impl Engine {
         match c {
             Command::Play {
                 queue,
+                filter,
                 channel,
                 tracks,
+                pool,
                 index,
             } => {
-                if self.state.queue.as_deref() != Some(&queue) {
+                if self.state.queue.as_deref() != Some(&queue) || self.state.filter != filter {
                     let _ = mpv.command("playlist-clear", &[]);
                     let _ = mpv.command("stop", &[]);
-                    self.order = shuffle(tracks.len(), index, random());
+                    let first = pool.iter().position(|&i| i == index).unwrap_or(0);
+                    self.order = shuffle(pool.len(), first, random())
+                        .into_iter()
+                        .filter_map(|k| pool.get(k).copied())
+                        .filter(|&i| i < tracks.len())
+                        .collect();
                     for &i in &self.order {
                         let _ = mpv.command("loadfile", &[&tracks[i].url, "append"]);
                     }
                     self.titles = tracks.into_iter().map(|t| t.title).collect();
                     self.state.queue = Some(queue);
+                    self.state.filter = filter;
                     self.state.channel = channel;
                 }
                 let at = self.order.iter().position(|&i| i == index).unwrap_or(0);
@@ -370,8 +392,10 @@ mod tests {
         let mut p = Player::spawn(&[("ao", "null"), ("keep-open", "yes")], || {});
         p.send(Command::Play {
             queue: "c".into(),
+            filter: None,
             channel: "C".into(),
             tracks: vec![track(&bad, "bad"), track(&good, "good")],
+            pool: vec![0, 1],
             index: 0,
         });
         let start = std::time::Instant::now();
@@ -392,7 +416,7 @@ mod tests {
     fn reports_the_chosen_track_through_the_shuffle() {
         let dir = std::env::temp_dir().join(format!("r4-shuffle-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let tracks = (0..6)
+        let tracks: Vec<_> = (0..6)
             .map(|i| {
                 let path = dir.join(format!("{i}.wav"));
                 silence(&path);
@@ -405,8 +429,10 @@ mod tests {
         let mut p = Player::spawn(&[("ao", "null"), ("keep-open", "yes")], || {});
         p.send(Command::Play {
             queue: "c".into(),
+            filter: None,
             channel: "C".into(),
-            tracks,
+            tracks: tracks.clone(),
+            pool: (0..6).collect(),
             index: 4,
         });
         let start = std::time::Instant::now();
@@ -417,6 +443,28 @@ mod tests {
         }
         assert_eq!(p.state.index, Some(4));
         assert_eq!(p.state.title, "t4");
+
+        // A filtered channel plays only its pool, still counting in the channel's tracks.
+        p.send(Command::Play {
+            queue: "c".into(),
+            filter: Some("#dub".into()),
+            channel: "C".into(),
+            tracks,
+            pool: vec![1, 3],
+            index: 3,
+        });
+        p.send(Command::Next);
+        let start = std::time::Instant::now();
+        while !(p.state.index == Some(1) && p.state.dur.is_some()) {
+            assert!(
+                start.elapsed().as_secs() < 10,
+                "never moved within the filter"
+            );
+            std::thread::sleep(Duration::from_millis(50));
+            p.update();
+        }
+        assert_eq!(p.state.filter.as_deref(), Some("#dub"));
+        assert_eq!(p.state.station(), "C · #dub");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

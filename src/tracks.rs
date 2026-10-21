@@ -1,14 +1,49 @@
 //! A channel's tracks from the R4 Supabase project, YouTube only.
 use crate::channels::ANON_KEY;
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 
-const URL: &str = "https://oupgudlkspsmzkmeovlh.supabase.co/rest/v1/channel_tracks?select=title,url,provider&order=created_at.desc";
+const URL: &str = "https://oupgudlkspsmzkmeovlh.supabase.co/rest/v1/channel_tracks?select=title,description,url,provider,tags&order=created_at.desc";
 
-#[derive(Debug, Deserialize, PartialEq)]
+#[derive(Debug, Default, Deserialize, PartialEq)]
 pub struct Track {
     pub title: Option<String>,
+    /// What the channel wrote about it.
+    #[serde(default)]
+    pub description: Option<String>,
     pub url: String,
     pub provider: Option<String>,
+    /// The #hashtags in its description, without the #, lowercase.
+    #[serde(default, deserialize_with = "lowercase")]
+    pub tags: Vec<String>,
+}
+
+impl Track {
+    pub fn tagged(&self, tag: &str) -> bool {
+        self.tags.iter().any(|t| t == tag)
+    }
+}
+
+/// The tags on these tracks with how many carry each, most used first, then alphabetically.
+pub fn tags<'a>(list: impl IntoIterator<Item = &'a Track>) -> Vec<(&'a str, usize)> {
+    let mut counts = std::collections::HashMap::new();
+    for tag in list.into_iter().flat_map(|t| &t.tags) {
+        *counts.entry(tag.as_str()).or_insert(0) += 1;
+    }
+    let mut tags: Vec<_> = counts.into_iter().collect();
+    tags.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
+    tags
+}
+
+fn lowercase<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<String>, D::Error> {
+    let tags: Option<Vec<String>> = Option::deserialize(d)?;
+    let mut tags: Vec<String> = tags
+        .unwrap_or_default()
+        .into_iter()
+        .map(|t| t.to_lowercase())
+        .collect();
+    tags.sort();
+    tags.dedup();
+    Ok(tags)
 }
 
 pub fn fetch(slug: &str) -> Result<Vec<Track>, String> {
@@ -46,5 +81,19 @@ mod tests {
         .unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].title.as_deref(), Some("A"));
+    }
+
+    #[test]
+    fn counts_tags_most_used_first() {
+        let rows = parse(
+            r#"[{"title":"A","url":"a","provider":"youtube","tags":["Dub","video"]},
+            {"title":"B","url":"b","provider":"youtube","tags":["dub"]},
+            {"title":"C","url":"c","provider":"youtube","tags":null},
+            {"title":"D","url":"d","provider":"youtube"}]"#,
+        )
+        .unwrap();
+        assert!(rows[0].tagged("dub"));
+        assert!(rows[2].tags.is_empty() && rows[3].tags.is_empty());
+        assert_eq!(tags(&rows), [("dub", 2), ("video", 1)]);
     }
 }

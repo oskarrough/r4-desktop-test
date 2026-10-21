@@ -48,14 +48,24 @@ pub fn from_env() -> Option<Demo> {
         track_count: Some(2648),
         ..channel("oskar", "Radio Oskar")
     };
-    let track = |title: &str| Track {
-        title: Some(title.into()),
-        url: String::new(),
-        provider: None,
+    // Some with words from the channel, and the tags in them.
+    let track = |title: &str| {
+        let (title, words) = title.split_once(" | ").unwrap_or((title, ""));
+        Track {
+            title: Some(title.into()),
+            description: (!words.is_empty()).then(|| words.into()),
+            tags: words
+                .split_whitespace()
+                .filter_map(|w| w.strip_prefix('#'))
+                .map(str::to_owned)
+                .collect(),
+            ..Track::default()
+        }
     };
     let state = State {
         queue: Some("oskar".into()),
         channel: "Radio Oskar".into(),
+        filter: None,
         index: Some(2),
         title: "Ry Cooder & Manuel Galbán – Drume Negrita".into(),
         paused: false,
@@ -85,23 +95,23 @@ pub fn from_env() -> Option<Demo> {
             channel("cocoa", "Cocoa Beach Eco Tours"),
         ],
         tracks: vec![
-            track("Alice Coltrane – Journey in Satchidananda"),
+            track("Alice Coltrane – Journey in Satchidananda | #spiritual #jazz"),
             track("Khruangbin – Maria También"),
-            track("Ry Cooder & Manuel Galbán – Drume Negrita"),
-            track("Mulatu Astatke – Yègellé Tezeta"),
+            track("Ry Cooder & Manuel Galbán – Drume Negrita | hej far, håber det går godt!"),
+            track("Mulatu Astatke – Yègellé Tezeta | #ethiojazz #jazz"),
             track("Arthur Russell – A Little Lost"),
             track("Os Mutantes – A Minha Menina"),
-            track("Tinariwen – Cler Achel"),
+            track("Tinariwen – Cler Achel | #desert"),
             track("Broadcast – Come On Let's Go"),
-            track("Ali Farka Touré & Toumani Diabaté – Ruby"),
+            track("Ali Farka Touré & Toumani Diabaté – Ruby | #desert for long drives"),
             track("Stereolab – French Disko"),
-            track("Ebo Taylor – Love and Death"),
+            track("Ebo Taylor – Love and Death | #afrobeat #highlife"),
             track("Can – Vitamin C"),
             track("Nina Simone – Feeling Good"),
             track("William Onyeabor – Fantastic Man"),
             track("Cocteau Twins – Heaven or Las Vegas"),
-            track("Fela Kuti – Water No Get Enemy"),
-            track("Hailu Mergia – Hari Meru Mela"),
+            track("Fela Kuti – Water No Get Enemy | #afrobeat"),
+            track("Hailu Mergia – Hari Meru Mela | #ethiojazz #jazz"),
             track("Joni Mitchell – Coyote"),
             track("Talking Heads – Once in a Lifetime"),
             track("Gal Costa – Pérola Negra"),

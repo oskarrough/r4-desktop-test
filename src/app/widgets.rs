@@ -31,6 +31,7 @@ fastframe_icons::icons! {
         Speaker => lucide "volume-2",
         Muted => lucide "volume-x",
         Search => lucide "search",
+        Hash => "hash",
         Back => lucide "chevron-left",
     }
 }
@@ -117,11 +118,14 @@ pub(super) fn arc(ui: &Ui, c: Pos2, radius: f32, frac: f32, stroke: egui::Stroke
 /// `back` is how far the channel has slid over the channel list, when it does: the buttons hold still meanwhile,
 /// back shows, then the title drifts in; leaving runs it in reverse. Back leads and search trails, as on the overview,
 /// so the title sits centred between them.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn chrome(
     ui: &mut Ui,
     rect: Rect,
     open: &ChannelRef,
     image: Option<&str>,
+    tag: Option<&str>,
+    tagged: bool,
     back_button: Option<f32>,
     actions: &mut Vec<Action>,
 ) {
@@ -150,15 +154,29 @@ pub(super) fn chrome(
         if search.on_hover_text("Search tracks (/)").clicked() {
             actions.push(Action::Search(SearchTarget::Tracks(open.clone())));
         }
+        // Tags sit beside search, for channels that use them.
+        let mut inner = c.x;
+        if tagged {
+            let t = pos2(c.x - KNOB - 2.0 * UNIT, cy);
+            let r = knob(ui, t, "tags");
+            Icon::Hash
+                .image(pal.text, ICON)
+                .paint_at(ui, Rect::from_center_size(t, vec2(ICON, ICON)));
+            if r.on_hover_text("Tags (t)").clicked() {
+                actions.push(Action::Search(SearchTarget::Tags(open.clone())));
+            }
+            inner = t.x;
+        }
+        let title = tag.map_or_else(|| open.name.clone(), |t| format!("#{t}"));
         let left = home + KNOB / 2.0 + 2.0 * UNIT;
-        let right = c.x - KNOB / 2.0 - 2.0 * UNIT;
+        let right = inner - KNOB / 2.0 - 2.0 * UNIT;
         let arrived = stage(shown, 0.35, 1.0);
         let drift = snap(ui, vec2((1.0 - arrived) * 4.0 * UNIT, 0.0)).x;
         let r = faded(ui, arrived, |ui| {
             pill(
                 ui,
                 pos2((left + right) / 2.0 + drift, cy),
-                &open.name,
+                &title,
                 image,
                 (right - left).max(0.0),
             )

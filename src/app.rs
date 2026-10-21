@@ -7,8 +7,8 @@ mod transport;
 mod widgets;
 
 use self::browse::{
-    Search, SearchTarget, channel_info, channel_list, matching, matching_tracks, open_page,
-    search_panel, title, tracklist,
+    Search, SearchTarget, channel_info, channel_list, matching, matching_tags, matching_tracks,
+    open_page, search_panel, shown_tracks, title, tracklist,
 };
 use self::list::{ListScroll, Reveal, note};
 use self::navigation::{ChannelRef, Nav, Slide, snap};
@@ -149,8 +149,10 @@ enum Action {
     ShowNow,
     /// Open the search panel.
     Search(SearchTarget),
-    /// Play this track of the open channel.
+    /// Play this track of the open channel, as far as it's narrowed to a filter.
     Play(usize),
+    /// Narrow the open channel to this filter.
+    Tag(String),
     /// Play an original queue index from filtered results, keeping the query and list position.
     PlayTrack(ChannelRef, usize),
     Toggle,
@@ -191,9 +193,19 @@ impl eframe::App for App {
                 egui::CentralPanel::no_frame().frame(flat).show(ui, |ui| {
                     let tracks = match &search.target {
                         SearchTarget::Channels => None,
-                        SearchTarget::Tracks(open) => self.library.tracks(&open.slug),
+                        SearchTarget::Tracks(open) | SearchTarget::Tags(open) => {
+                            self.library.tracks(&open.slug)
+                        }
                     };
-                    search_panel(ui, search, self.library.channels(), tracks, state, actions);
+                    search_panel(
+                        ui,
+                        search,
+                        self.library.channels(),
+                        tracks,
+                        self.nav.filter.as_deref(),
+                        state,
+                        actions,
+                    );
                     dock(ui, state, face_of_playing, &mut self.scrub, actions);
                 });
             } else if wide {
@@ -223,6 +235,7 @@ impl eframe::App for App {
                             o,
                             self.library.find(&o.slug),
                             self.library.tracks(&o.slug),
+                            self.nav.filter.as_deref(),
                             state,
                             self.nav.show_channel_info,
                             self.nav.info_transition,
@@ -311,6 +324,7 @@ impl eframe::App for App {
                                     o,
                                     self.library.find(&o.slug),
                                     self.library.tracks(&o.slug),
+                                    self.nav.filter.as_deref(),
                                     state,
                                     self.nav.show_channel_info,
                                     self.nav.info_transition,
@@ -391,6 +405,7 @@ fn channel_pane(
     open: &ChannelRef,
     channel: Option<&Channel>,
     tracks: Option<Result<&[crate::tracks::Track], &str>>,
+    filter: Option<&str>,
     state: &player::State,
     show_info: bool,
     transition: Option<Slide>,
@@ -422,6 +437,7 @@ fn channel_pane(
                 open,
                 channel.and_then(|c| c.image.as_deref()),
                 tracks,
+                filter,
                 state,
                 back,
                 scroll,
@@ -469,7 +485,7 @@ impl App {
         if let Some(p) = self.pending_play.take() {
             match self.library.tracks(&p.slug) {
                 None => self.pending_play = Some(p),
-                Some(_) => self.shuffle(&p.slug, &p.name),
+                Some(_) => self.shuffle(&p.slug, &p.name, None),
             }
         }
         let before = (self.player.state.queue.clone(), self.player.state.index);
@@ -477,13 +493,7 @@ impl App {
             self.player.update();
         }
         let s = &self.player.state;
-        if s.index.is_some()
-            && (s.queue.clone(), s.index) != before
-            && !self
-                .nav
-                .search
-                .as_ref()
-                .is_some_and(|s| matches!(&s.target, SearchTarget::Tracks(_)))
+        if s.index.is_some() && (s.queue.clone(), s.index) != before && !self.searching_in_channel()
         {
             self.track_scroll.reveal = Some(Reveal::Glide);
         }
@@ -528,6 +538,9 @@ impl App {
                     .map_or(SearchTarget::Channels, |open| {
                         SearchTarget::Tracks(open.clone())
                     });
+                if let SearchTarget::Tracks(open) = &target {
+                    key(Key::T, Action::Search(SearchTarget::Tags(open.clone())));
+                }
                 key(Key::Slash, Action::Search(target));
             }
             key(Key::Escape, Action::Back);
@@ -632,12 +645,19 @@ impl App {
                                 Some(Ok(l)) => matching_tracks(&search.query, l).len(),
                                 _ => 0,
                             },
+                            SearchTarget::Tags(open) => match self.library.tracks(&open.slug) {
+                                Some(Ok(l)) => {
+                                    matching_tags(&search.query, l, self.nav.filter.as_deref())
+                                        .len()
+                                }
+                                _ => 0,
+                            },
                         },
                         &mut search.scroll,
                     ),
                     (None, Some(o)) => (
                         match self.library.tracks(&o.slug) {
-                            Some(Ok(l)) => l.len(),
+                            Some(Ok(l)) => shown_tracks(l, self.nav.filter.as_deref()).len(),
                             _ => 0,
                         },
                         &mut self.track_scroll,
@@ -676,6 +696,16 @@ impl App {
                                 *matching_tracks(&search.query, list).get(search.scroll.cursor)?;
                             Some(Action::PlayTrack(open.clone(), i))
                         }),
+                    SearchTarget::Tags(open) => self
+                        .library
+                        .tracks(&open.slug)
+                        .and_then(Result::ok)
+                        .and_then(|list| {
+                            let (tag, _) =
+                                *matching_tags(&search.query, list, self.nav.filter.as_deref())
+                                    .get(search.scroll.cursor)?;
+                            Some(Action::Tag(tag.to_owned()))
+                        }),
                 };
                 if let Some(action) = action {
                     self.dispatch(ctx, action);
@@ -683,7 +713,14 @@ impl App {
             }
             Action::Choose if !self.nav.show_now_playing => match &self.nav.open_channel {
                 Some(o) if self.nav.show_channel_info => open_page(ctx, &o.slug),
-                Some(_) => self.dispatch(ctx, Action::Play(self.track_scroll.cursor)),
+                Some(o) => {
+                    if let Some(Ok(list)) = self.library.tracks(&o.slug)
+                        && let Some(&i) = shown_tracks(list, self.nav.filter.as_deref())
+                            .get(self.track_scroll.cursor)
+                    {
+                        self.dispatch(ctx, Action::Play(i));
+                    }
+                }
                 None => {
                     if let Some(Ok(list)) = self.library.channels()
                         && let Some(c) = list.get(self.channel_scroll.cursor)
@@ -700,21 +737,28 @@ impl App {
                 {
                     self.channel_scroll.cursor = i;
                 }
-                self.track_scroll.cursor = match self.player.state.queue.as_deref() == Some(&slug) {
-                    true => self.player.state.index.unwrap_or(0),
-                    false => 0,
-                };
-                self.track_scroll.reset_glide();
                 // A glide on the channel list stays there.
                 self.scrolling.stop();
                 self.library.request_tracks(&slug);
-                self.track_scroll.reveal =
-                    (self.player.state.queue.as_deref() == Some(&slug)).then_some(Reveal::Jump);
                 self.nav.open(ChannelRef { slug, name });
+                self.find_playing();
             }
             Action::Back => {
                 self.scrolling.stop();
+                let narrowed = self.nav.filter.is_some();
                 self.nav.back();
+                if narrowed && self.nav.filter.is_none() {
+                    self.find_playing();
+                }
+            }
+            Action::Tag(tag) => {
+                self.scrolling.stop();
+                self.nav.search = None;
+                self.nav.filter = Some(match self.nav.filter.take() {
+                    Some(filter) => format!("{filter} #{tag}"),
+                    None => format!("#{tag}"),
+                });
+                self.find_playing();
             }
             Action::PlayChannel(slug, name) => {
                 if self.demo {
@@ -731,14 +775,45 @@ impl App {
             Action::ShowNow => self.nav.set_now_playing(self.player.state.queue.is_some()),
             Action::Search(target) => {
                 self.scrolling.stop();
-                self.nav.search = Some(Search::new(target));
+                let mut search = Search::new(target);
+                // Searching a narrowed channel starts from what it's narrowed to, to add to or take away.
+                if let (SearchTarget::Tracks(_), Some(filter)) = (&search.target, &self.nav.filter)
+                {
+                    search.query = format!("{filter} ");
+                }
+                self.nav.search = Some(search);
             }
-            Action::PlayTrack(open, index) => self.play(&open.slug, &open.name, index),
+            // What's searched for is what plays, and what the channel shows once the search closes.
+            Action::PlayTrack(open, index) => {
+                let filter = self
+                    .nav
+                    .search
+                    .as_ref()
+                    .map(|s| s.query.split_whitespace().collect::<Vec<_>>().join(" "))
+                    .filter(|q| !q.is_empty());
+                if filter != self.nav.filter
+                    && let Some(Ok(list)) = self.library.tracks(&open.slug)
+                {
+                    // The tracklist under the search follows, ready on the track once the search closes.
+                    let shown = shown_tracks(list, filter.as_deref());
+                    self.track_scroll.cursor = shown.iter().position(|&i| i == index).unwrap_or(0);
+                    self.track_scroll.reveal = Some(Reveal::Jump);
+                    self.nav.filter = filter.clone();
+                }
+                self.play(&open.slug, &open.name, index, filter);
+            }
             Action::Play(index) => {
-                self.track_scroll.cursor = index;
                 if let Some(o) = &self.nav.open_channel {
-                    let (slug, name) = (o.slug.clone(), o.name.clone());
-                    self.play(&slug, &name, index);
+                    let (slug, name, filter) =
+                        (o.slug.clone(), o.name.clone(), self.nav.filter.clone());
+                    if let Some(Ok(list)) = self.library.tracks(&slug)
+                        && let Some(at) = shown_tracks(list, filter.as_deref())
+                            .iter()
+                            .position(|&i| i == index)
+                    {
+                        self.track_scroll.cursor = at;
+                    }
+                    self.play(&slug, &name, index, filter);
                 }
             }
             // Like the iPod's play button on a highlighted playlist: Space plays the channel under the cursor.
@@ -749,8 +824,9 @@ impl App {
             // Space with nothing loaded starts the open channel at a random track.
             Action::Toggle if self.player.state.queue.is_none() => {
                 if let Some(o) = &self.nav.open_channel {
-                    let (slug, name) = (o.slug.clone(), o.name.clone());
-                    self.shuffle(&slug, &name);
+                    let (slug, name, filter) =
+                        (o.slug.clone(), o.name.clone(), self.nav.filter.clone());
+                    self.shuffle(&slug, &name, filter);
                 }
             }
             Action::Toggle => self.player.send(Command::Toggle),
@@ -802,29 +878,66 @@ impl App {
         (listed && self.player.state.queue.as_deref() != Some(&c.slug)).then_some(c)
     }
 
-    /// Plays a channel from a random track, another one than is playing if it's this channel.
-    fn shuffle(&mut self, slug: &str, name: &str) {
-        let Some(Ok(list)) = self.library.tracks(slug) else {
+    /// A search or filter list over the open channel, which leaves the tracklist where it is.
+    fn searching_in_channel(&self) -> bool {
+        self.nav
+            .search
+            .as_ref()
+            .is_some_and(|s| matches!(&s.target, SearchTarget::Tracks(_) | SearchTarget::Tags(_)))
+    }
+
+    /// Puts the tracklist's cursor on the playing track if the open channel shows it, else on the first,
+    /// and brings it into view.
+    fn find_playing(&mut self) {
+        let Some(o) = &self.nav.open_channel else {
             return;
         };
         let s = &self.player.state;
-        let now = s.index.filter(|_| s.queue.as_deref() == Some(slug));
-        let index = player::pick(list.len(), now, player::random());
-        self.play(slug, name, index);
+        let at = match self.library.tracks(&o.slug) {
+            Some(Ok(list)) => s
+                .index
+                .filter(|_| s.queue.as_deref() == Some(&o.slug))
+                .and_then(|i| {
+                    shown_tracks(list, self.nav.filter.as_deref())
+                        .iter()
+                        .position(|&j| j == i)
+                }),
+            // Still loading: the tracklist finds the playing track once it's here.
+            _ => s.index.filter(|_| s.queue.as_deref() == Some(&o.slug)),
+        };
+        self.track_scroll.reset_glide();
+        self.track_scroll.cursor = at.unwrap_or(0);
+        self.track_scroll.reveal = Some(match at {
+            Some(_) => Reveal::Jump,
+            None => Reveal::Show(0),
+        });
     }
 
-    fn play(&mut self, slug: &str, name: &str, index: usize) {
+    /// Plays a channel, or its filter, from a random track, another one than is playing if it's this one.
+    fn shuffle(&mut self, slug: &str, name: &str, filter: Option<String>) {
+        let Some(Ok(list)) = self.library.tracks(slug) else {
+            return;
+        };
+        let pool = shown_tracks(list, filter.as_deref());
+        let s = &self.player.state;
+        let now = s
+            .index
+            .filter(|_| s.queue.as_deref() == Some(slug))
+            .and_then(|i| pool.iter().position(|&j| j == i));
+        let Some(&index) = pool.get(player::pick(pool.len(), now, player::random())) else {
+            return;
+        };
+        self.play(slug, name, index, filter);
+    }
+
+    fn play(&mut self, slug: &str, name: &str, index: usize, filter: Option<String>) {
         // Whatever was asked for last wins over a channel still waiting on its tracks.
         self.pending_play = None;
         // The demo's player stands still, so follow the tap by hand.
         if self.demo {
             self.player.state.index = Some(index);
-            if !self
-                .nav
-                .search
-                .as_ref()
-                .is_some_and(|s| matches!(&s.target, SearchTarget::Tracks(_)))
-            {
+            self.player.state.filter = filter;
+            if !self.searching_in_channel() {
                 self.track_scroll.reveal = Some(Reveal::Glide);
             }
             return;
@@ -835,8 +948,11 @@ impl App {
         if index >= list.len() {
             return;
         }
+        let pool = shown_tracks(list, filter.as_deref());
         self.player.send(Command::Play {
             queue: slug.to_string(),
+            filter,
+            pool,
             channel: name.to_string(),
             tracks: list
                 .iter()
@@ -868,6 +984,7 @@ mod tests {
                         title: Some("B track".into()),
                         url: "/tmp/missing-b.wav".into(),
                         provider: None,
+                        ..Default::default()
                     }],
                 )]),
             ),
@@ -905,6 +1022,7 @@ mod tests {
                 title: Some("A track".into()),
                 url: "/tmp/missing-a.wav".into(),
                 provider: None,
+                ..Default::default()
             }]))
             .unwrap();
         app.poll_updates();

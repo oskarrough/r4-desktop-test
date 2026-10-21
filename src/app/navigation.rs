@@ -24,6 +24,8 @@ pub(super) struct Nav {
     pub(super) show_now_playing: bool,
     pub(super) now_playing_transition: Option<Slide>,
     pub(super) search: Option<Search>,
+    /// The open channel narrowed to the tracks matching this, as typed in search: `#dub house`.
+    pub(super) filter: Option<String>,
 }
 
 impl Nav {
@@ -36,6 +38,7 @@ impl Nav {
         self.info_transition = None;
         self.set_now_playing(false);
         self.search = None;
+        self.filter = None;
     }
     pub(super) fn back(&mut self) {
         if self.show_now_playing {
@@ -44,6 +47,8 @@ impl Nav {
             self.search = None;
         } else if self.show_channel_info {
             self.set_info(false);
+        } else if self.filter.is_some() {
+            self.filter = None;
         } else if self.open_channel.is_some() {
             self.info_transition = None;
             self.departing_channel = self.open_channel.take();
@@ -151,7 +156,7 @@ mod tests {
     }
 
     #[test]
-    fn back_peels_now_playing_search_info_then_channel() {
+    fn back_peels_now_playing_search_info_tag_then_channel() {
         let mut nav = Nav {
             open_channel: Some(ChannelRef {
                 slug: "oskar".into(),
@@ -160,6 +165,7 @@ mod tests {
             show_channel_info: true,
             search: Some(Search::new(SearchTarget::Channels)),
             show_now_playing: true,
+            filter: Some("#dub".into()),
             ..Nav::default()
         };
 
@@ -179,6 +185,10 @@ mod tests {
 
         nav.back();
         assert!(!nav.show_channel_info);
+        assert_eq!(nav.filter.as_deref(), Some("#dub"));
+
+        nav.back();
+        assert!(nav.filter.is_none());
         assert!(nav.open_channel.is_some());
         assert!(nav.channel_transition.is_none());
 

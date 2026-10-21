@@ -156,7 +156,7 @@ pub(super) fn dock(
         x,
         cy - 2.0 * UNIT,
     );
-    let sub = format!("{}{time}", s.channel);
+    let sub = format!("{}{time}", s.station());
     put(
         ui,
         fit(ui, &sub, font(SMALL, Weight::Regular), pal.secondary, width),
@@ -190,7 +190,7 @@ pub(super) fn now_playing(
 
     let channel = fit(
         ui,
-        &s.channel,
+        &s.station(),
         font(BODY, Weight::Regular),
         pal.accent,
         width,

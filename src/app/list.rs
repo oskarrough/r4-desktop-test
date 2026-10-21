@@ -2,7 +2,8 @@
 use super::navigation::ease;
 use super::transport::DOCK;
 use super::widgets::{AVATAR, Icon, TOP, chevron, face, fit, put};
-use crate::style::{BODY, MARGIN, UNIT, font, palette};
+use crate::style::{BODY, MARGIN, Palette, UNIT, font, palette};
+use egui::text::{LayoutJob, TextFormat, TextWrapping};
 use egui::{Color32, Rect, Response, Sense, Ui, pos2, vec2};
 use fastframe_fonts::Weight;
 use std::time::{Duration, Instant};
@@ -40,11 +41,13 @@ struct Glide {
 }
 
 /// One row of a list: the name at the margin, then a playing dot or, for rows that open something, a chevron.
+/// A `note` follows the name on the same line, quieter, and is the first to be cut short.
 /// `avatar` gives the row an avatar slot at the margin: the channel's image, or its initial when it has none.
 /// The avatar is a play button of its own, showing so while the row is pointed at or focused; its response comes second.
 pub(super) fn row(
     ui: &mut Ui,
     label: &str,
+    note: Option<&str>,
     avatar: Option<Option<&str>>,
     selected: bool,
     playing: bool,
@@ -55,7 +58,11 @@ pub(super) fn row(
     if !ui.is_rect_visible(rect) {
         return (r, None);
     }
-    let fill = if selected || (avatar.is_some() && r.has_focus()) {
+    // The playing track lights up white, its title dark against it.
+    let lit = playing && avatar.is_none();
+    let fill = if lit {
+        Color32::WHITE
+    } else if selected || (avatar.is_some() && r.has_focus()) {
         pal.selected
     } else if avatar.is_none() && r.has_focus() {
         pal.hover
@@ -95,12 +102,23 @@ pub(super) fn row(
         play = Some(p);
         x += AVATAR + 2.0 * UNIT;
     }
-    put(
-        ui,
-        fit(ui, label, font(BODY, Weight::Regular), pal.text, right - x),
-        x,
-        cy,
-    );
+    let (ink, quiet) = if lit {
+        (Palette::dark().bg, Palette::dark().secondary)
+    } else {
+        (pal.text, pal.secondary)
+    };
+    let line = match note {
+        Some(note) => {
+            let body = font(BODY, Weight::Regular);
+            let mut job = LayoutJob::default();
+            job.append(label, 0.0, TextFormat::simple(body.clone(), ink));
+            job.append(note, 2.0 * UNIT, TextFormat::simple(body, quiet));
+            job.wrap = TextWrapping::truncate_at_width((right - x).max(0.0));
+            ui.painter().layout_job(job)
+        }
+        None => fit(ui, label, font(BODY, Weight::Regular), ink, right - x),
+    };
+    put(ui, line, x, cy);
     (r, play)
 }
 

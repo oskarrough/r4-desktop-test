@@ -50,7 +50,7 @@ pub fn shown(s: &State, avatar: Option<String>) -> Shown {
         track: Some(Track {
             id,
             title: s.title.clone(),
-            artists: vec![s.channel.clone()],
+            artists: vec![s.station()],
             duration: s.dur.map(|d| Duration::from_secs_f64(d.max(0.0))),
             art_url: avatar,
             ..Track::default()
