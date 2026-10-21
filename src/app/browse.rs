@@ -14,11 +14,29 @@ use egui::text::LayoutJob;
 use egui::{Rect, Sense, Ui, pos2, vec2};
 use fastframe_fonts::Weight;
 
-/// What's typed in the search panel, and its list's scroll and cursor.
-#[derive(Default)]
+/// The library list this search filters.
+pub(super) enum SearchTarget {
+    Channels,
+    Tracks(ChannelRef),
+}
+
+/// The query and its independent result-list scroll and cursor.
 pub(super) struct Search {
+    pub(super) target: SearchTarget,
     pub(super) query: String,
     pub(super) scroll: ListScroll,
+}
+
+impl Search {
+    pub(super) fn new(target: SearchTarget) -> Self {
+        let mut scroll = ListScroll::default();
+        scroll.reveal = Some(Reveal::Show(0));
+        Self {
+            target,
+            query: String::new(),
+            scroll,
+        }
+    }
 }
 
 pub(super) fn title(t: &Track) -> &str {
@@ -57,7 +75,7 @@ pub(super) fn channel_list(
         .image(pal.text, ICON)
         .paint_at(ui, Rect::from_center_size(c, vec2(ICON, ICON)));
     if r.on_hover_text("Search (/)").clicked() {
-        actions.push(Action::Search);
+        actions.push(Action::Search(SearchTarget::Channels));
     }
 }
 
@@ -85,32 +103,74 @@ fn channel_row(
     }
 }
 
-/// The search panel: a back button and the field floating at the top, the channels that match under them.
-/// The cursor always shows, so return opens the first match straight away.
+/// The search panel: a back button and the field floating at the top, matching channels or tracks below.
+/// The cursor always shows, so Return opens or plays the selected match.
 pub(super) fn search_panel(
     ui: &mut Ui,
     search: &mut Search,
     channels: Option<Result<&[Channel], &str>>,
-    playing: Option<&str>,
+    tracks: Option<Result<&[Track], &str>>,
+    state: &State,
     actions: &mut Vec<Action>,
 ) {
     let pal = palette(ui);
     let rect = ui.max_rect();
-    match channels {
-        None => note(ui, "Loading…"),
-        Some(Err(e)) => note(ui, &format!("Could not load channels: {e}")),
-        Some(Ok(list)) => {
-            let hits = matching(&search.query, list);
-            if hits.is_empty() {
-                note(ui, "No channels match.");
-            } else {
-                search.scroll.cursor = search.scroll.cursor.min(hits.len() - 1);
-                let cursor = search.scroll.cursor;
-                rows(ui, hits.len(), None, &mut search.scroll, |ui, i| {
-                    channel_row(ui, &list[hits[i]], cursor == i, playing, true, actions);
-                });
+    match &search.target {
+        SearchTarget::Channels => match channels {
+            None => note(ui, "Loading…"),
+            Some(Err(e)) => note(ui, &format!("Could not load channels: {e}")),
+            Some(Ok(list)) => {
+                let hits = matching(&search.query, list);
+                if hits.is_empty() {
+                    note(ui, "No channels match.");
+                } else {
+                    search.scroll.cursor = search.scroll.cursor.min(hits.len() - 1);
+                    let cursor = search.scroll.cursor;
+                    rows(ui, hits.len(), None, &mut search.scroll, |ui, i| {
+                        channel_row(
+                            ui,
+                            &list[hits[i]],
+                            cursor == i,
+                            state.queue.as_deref(),
+                            true,
+                            actions,
+                        );
+                    });
+                }
             }
-        }
+        },
+        SearchTarget::Tracks(open) => match tracks {
+            None => note(ui, "Loading…"),
+            Some(Err(e)) => note(ui, &format!("Could not load tracks: {e}")),
+            Some(Ok(list)) => {
+                let hits = matching_tracks(&search.query, list);
+                if hits.is_empty() {
+                    note(ui, "No tracks match.");
+                } else {
+                    search.scroll.cursor = search.scroll.cursor.min(hits.len() - 1);
+                    let cursor = search.scroll.cursor;
+                    let current = state
+                        .index
+                        .filter(|_| state.queue.as_deref() == Some(&open.slug));
+                    rows(ui, hits.len(), None, &mut search.scroll, |ui, i| {
+                        let index = hits[i];
+                        if row(
+                            ui,
+                            title(&list[index]),
+                            None,
+                            cursor == i,
+                            current == Some(index),
+                            false,
+                        )
+                        .0
+                        .clicked()
+                        {
+                            actions.push(Action::PlayTrack(open.clone(), index));
+                        }
+                    });
+                }
+            }
+        },
     }
 
     fade(ui, rect);
@@ -136,13 +196,17 @@ pub(super) fn search_panel(
         icon.x + ICON / 2.0 + 2.0 * UNIT..=field.right() - 3.0 * UNIT,
         field.y_range(),
     );
+    let hint = match &search.target {
+        SearchTarget::Channels => "Search channels",
+        SearchTarget::Tracks(_) => "Search tracks",
+    };
     let edit = egui::TextEdit::singleline(&mut search.query)
         .frame(egui::Frame::NONE)
         .margin(0.0)
         .vertical_align(egui::Align::Center)
         .font(font(BODY, Weight::Regular))
         .text_color(pal.text)
-        .hint_text(egui::RichText::new("Search channels").color(pal.secondary))
+        .hint_text(egui::RichText::new(hint).color(pal.secondary))
         .desired_width(text.width());
     let r = ui.put(text, edit);
     // The field is the panel's only input: it keeps the keyboard.
@@ -192,6 +256,20 @@ pub(super) fn matching(query: &str, list: &[Channel]) -> Vec<usize> {
     hits.into_iter().map(|(_, i)| i).collect()
 }
 
+/// Track matches keep their original queue indices and ordering, including URL fallback titles.
+pub(super) fn matching_tracks(query: &str, tracks: &[Track]) -> Vec<usize> {
+    let query = query.to_lowercase();
+    let words: Vec<_> = query.split_whitespace().collect();
+    tracks
+        .iter()
+        .enumerate()
+        .filter_map(|(i, track)| {
+            let name = title(track).to_lowercase();
+            words.iter().all(|word| name.contains(word)).then_some(i)
+        })
+        .collect()
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) fn tracklist(
     ui: &mut Ui,
@@ -229,7 +307,7 @@ pub(super) fn tracklist(
             });
         }
     }
-    chrome(ui, rect, &open.name, image, back, actions);
+    chrome(ui, rect, open, image, back, actions);
 }
 
 /// The channel's page on radio4000.com, in the browser.
@@ -423,5 +501,52 @@ mod tests {
         assert_eq!(found("liga"), ["sempre"]);
         assert_eq!(found("bel"), ["belleville"]);
         assert!(found("jazz").is_empty());
+    }
+
+    #[test]
+    fn track_search_matches_all_words_case_insensitively_and_uses_display_titles() {
+        let track = |title: Option<&str>, url: &str| crate::tracks::Track {
+            title: title.map(str::to_owned),
+            url: url.into(),
+            provider: None,
+        };
+        let list = [
+            track(Some("Blue Train — live"), "https://example.com/one"),
+            track(Some("Blue Moon"), "https://example.com/train"),
+            track(None, "https://example.com/BLUE-train-live"),
+            track(
+                Some("Live at the station"),
+                "https://example.com/blue-train",
+            ),
+        ];
+        assert_eq!(super::matching_tracks("LIVE blue", &list), [0, 2]);
+        assert_eq!(super::matching_tracks("train", &list), [0, 2]);
+        assert_eq!(super::matching_tracks("   ", &list), [0, 1, 2, 3]);
+        assert!(super::matching_tracks("blue jazz", &list).is_empty());
+    }
+
+    #[test]
+    fn filtered_track_positions_map_to_original_queue_indices_in_order() {
+        let list: Vec<_> = [
+            "Unrelated",
+            "Live first",
+            "Studio",
+            "Live second",
+            "Live first",
+        ]
+        .into_iter()
+        .map(|name| crate::tracks::Track {
+            title: Some(name.into()),
+            url: name.into(),
+            provider: None,
+        })
+        .collect();
+        let hits = super::matching_tracks("live", &list);
+        assert_eq!(hits, [1, 3, 4]);
+        let selected = hits[1];
+        assert_eq!(selected, 3);
+        assert_eq!(super::title(&list[selected]), "Live second");
+        assert_eq!(hits.iter().position(|&index| index == 4), Some(2));
+        assert!(hits.get(3).is_none());
     }
 }

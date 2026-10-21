@@ -1,5 +1,7 @@
 //! Shared text, artwork, headers, and drawing primitives.
 use super::Action;
+use super::browse::SearchTarget;
+use super::navigation::ChannelRef;
 use crate::channels;
 use crate::style::{BODY, CAP, SMALL, UNIT, font, palette};
 use egui::text::{LayoutJob, TextWrapping};
@@ -88,12 +90,12 @@ pub(super) fn arc(ui: &Ui, c: Pos2, radius: f32, frac: f32, stroke: egui::Stroke
     ui.painter().line(points, stroke);
 }
 
-/// What floats over the top of a list: a fade the rows scroll under, a round back button,
+/// What floats over the top of a list: a fade, back and search buttons,
 /// and the title in a pill with the channel's avatar, which opens the channel's details.
 pub(super) fn chrome(
     ui: &mut Ui,
     rect: Rect,
-    title: &str,
+    open: &ChannelRef,
     image: Option<&str>,
     back_button: bool,
     actions: &mut Vec<Action>,
@@ -104,12 +106,24 @@ pub(super) fn chrome(
     if back_button {
         back(ui, pos2(rect.left() + side, cy), actions);
     }
+    let search_x = rect.left() + side + if back_button { KNOB + UNIT } else { 0.0 };
+    let c = pos2(search_x, cy);
+    let pal = palette(ui);
+    let search = knob(ui, c, "search");
+    Icon::Search
+        .image(pal.text, ICON)
+        .paint_at(ui, Rect::from_center_size(c, vec2(ICON, ICON)));
+    if search.on_hover_text("Search tracks (/)").clicked() {
+        actions.push(Action::Search(SearchTarget::Tracks(open.clone())));
+    }
+    let left = search_x + KNOB / 2.0 + 2.0 * UNIT;
+    let right = rect.right() - 2.0 * UNIT;
     let r = pill(
         ui,
-        pos2(rect.center().x, cy),
-        title,
+        pos2((left + right) / 2.0, cy),
+        &open.name,
         image,
-        rect.width() - 4.0 * side,
+        (right - left).max(0.0),
     );
     if r.is_some_and(|r| r.on_hover_text("About this channel (i)").clicked()) {
         actions.push(Action::Info);

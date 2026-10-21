@@ -7,10 +7,11 @@ mod transport;
 mod widgets;
 
 use self::browse::{
-    Search, channel_info, channel_list, matching, open_page, search_panel, title, tracklist,
+    Search, SearchTarget, channel_info, channel_list, matching, matching_tracks, open_page,
+    search_panel, title, tracklist,
 };
 use self::list::{ListScroll, Reveal, note};
-use self::navigation::{ChannelRef, Nav, snap};
+use self::navigation::{ChannelRef, Nav, Slide, snap};
 use self::transport::{STEP, Scrub, Volume, dock, now_playing};
 use self::widgets::Icon;
 use crate::channels::{self, Channel};
@@ -18,7 +19,7 @@ use crate::library::Library;
 use crate::media::{self, NowPlaying};
 use crate::player::{self, Command, Player};
 use crate::style::palette;
-use egui::{Key, Modifiers, PointerButton, vec2};
+use egui::{Key, Modifiers, PointerButton, Sense, Ui, vec2};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -90,7 +91,7 @@ pub fn run() -> eframe::Result {
                 app.nav.open_channel = d.open.then_some(open);
                 app.nav.show_channel_info = d.info;
                 app.nav.show_now_playing = d.now;
-                app.nav.search = d.search.then(Search::default);
+                app.nav.search = d.search.then(|| Search::new(SearchTarget::Channels));
                 app.track_scroll.reveal = Some(Reveal::Jump);
                 if d.volume {
                     app.volume = Some(Volume {
@@ -143,9 +144,11 @@ enum Action {
     Info,
     ShowNow,
     /// Open the search panel.
-    Search,
+    Search(SearchTarget),
     /// Play this track of the open channel.
     Play(usize),
+    /// Play an original queue index from filtered results, keeping the query and list position.
+    PlayTrack(ChannelRef, usize),
     Toggle,
     /// Up or down by this much.
     Volume(f64),
@@ -182,7 +185,11 @@ impl eframe::App for App {
         if !self.nav.show_now_playing || self.nav.now_playing_transition.is_some() {
             if let Some(search) = &mut self.nav.search {
                 egui::CentralPanel::no_frame().frame(flat).show(ui, |ui| {
-                    search_panel(ui, search, self.library.channels(), playing, actions);
+                    let tracks = match &search.target {
+                        SearchTarget::Channels => None,
+                        SearchTarget::Tracks(open) => self.library.tracks(&open.slug),
+                    };
+                    search_panel(ui, search, self.library.channels(), tracks, state, actions);
                     dock(ui, state, face_of_playing, &mut self.scrub, actions);
                 });
             } else if wide {
@@ -204,27 +211,26 @@ impl eframe::App for App {
                         );
                     });
                 egui::CentralPanel::no_frame().frame(flat).show(ui, |ui| {
+                    let rect = ui.max_rect();
                     match &self.nav.open_channel {
-                        Some(o) if self.nav.show_channel_info => {
-                            channel_info(ui, o, self.library.find(&o.slug), actions)
-                        }
-                        Some(o) => {
-                            let image = self.library.avatar(&o.slug);
-                            tracklist(
-                                ui,
-                                o,
-                                image,
-                                self.library.tracks(&o.slug),
-                                state,
-                                false,
-                                &mut self.track_scroll,
-                                self.keyboard_cursor,
-                                actions,
-                            )
-                        }
+                        Some(o) => channel_pane(
+                            ui,
+                            o,
+                            self.library.find(&o.slug),
+                            self.library.tracks(&o.slug),
+                            state,
+                            self.nav.show_channel_info,
+                            self.nav.info_transition,
+                            false,
+                            &mut self.track_scroll,
+                            self.keyboard_cursor,
+                            actions,
+                        ),
                         None => note(ui, "Pick a channel."),
                     }
-                    dock(ui, state, face_of_playing, &mut self.scrub, actions);
+                    ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
+                        dock(ui, state, face_of_playing, &mut self.scrub, actions)
+                    });
                 });
             } else {
                 egui::CentralPanel::no_frame().frame(flat).show(ui, |ui| {
@@ -247,6 +253,11 @@ impl eframe::App for App {
                             egui::UiBuilder::new().max_rect(at).id_salt("channels"),
                             |ui| {
                                 ui.shrink_clip_rect(rect);
+                                if !live {
+                                    let opacity = ui.painter().opacity();
+                                    ui.disable();
+                                    ui.set_opacity(opacity);
+                                }
                                 channel_list(
                                     ui,
                                     self.library.channels(),
@@ -281,24 +292,33 @@ impl eframe::App for App {
                                         egui::Stroke::new(1.0, pal.hairline),
                                     );
                                 }
-                                if self.nav.show_channel_info && live {
-                                    channel_info(ui, o, self.library.find(&o.slug), acts)
-                                } else {
-                                    let image = self.library.avatar(&o.slug);
-                                    tracklist(
-                                        ui,
-                                        o,
-                                        image,
-                                        self.library.tracks(&o.slug),
-                                        state,
-                                        true,
-                                        &mut self.track_scroll,
-                                        self.keyboard_cursor && live,
-                                        acts,
-                                    )
+                                if !live {
+                                    let opacity = ui.painter().opacity();
+                                    ui.disable();
+                                    ui.set_opacity(opacity);
                                 }
+                                channel_pane(
+                                    ui,
+                                    o,
+                                    self.library.find(&o.slug),
+                                    self.library.tracks(&o.slug),
+                                    state,
+                                    self.nav.show_channel_info,
+                                    self.nav.info_transition,
+                                    true,
+                                    &mut self.track_scroll,
+                                    self.keyboard_cursor && live,
+                                    acts,
+                                );
                             },
                         );
+                        if !live {
+                            ui.interact(
+                                at.intersect(rect).intersect(ui.clip_rect()),
+                                ui.id().with("departing-channel-shield"),
+                                Sense::click_and_drag(),
+                            );
+                        }
                     }
                     // The mini player stays put while the lists slide under it,
                     // measured from the pane, which a view sliding off has stretched.
@@ -355,6 +375,92 @@ impl eframe::App for App {
     }
 }
 
+/// Tracks stay underneath details; the caller draws the dock against the original pane afterwards.
+#[allow(clippy::too_many_arguments)]
+fn channel_pane(
+    ui: &mut Ui,
+    open: &ChannelRef,
+    channel: Option<&Channel>,
+    tracks: Option<Result<&[crate::tracks::Track], &str>>,
+    state: &player::State,
+    show_info: bool,
+    transition: Option<Slide>,
+    back: bool,
+    scroll: &mut ListScroll,
+    keyed: bool,
+    actions: &mut Vec<Action>,
+) {
+    let rect = ui.max_rect();
+    let pal = palette(ui);
+    let shown = transition.map_or(if show_info { 1.0 } else { 0.0 }, |s| s.shown());
+    let mut ignored = Vec::new();
+    if !show_info || transition.is_some() {
+        let at = rect.translate(snap(ui, vec2(-DRIFT * shown * rect.width(), 0.0)));
+        let acts = if show_info {
+            &mut ignored
+        } else {
+            &mut *actions
+        };
+        ui.scope_builder(
+            egui::UiBuilder::new()
+                .max_rect(at)
+                .id_salt(("tracklist", &open.slug)),
+            |ui| {
+                ui.shrink_clip_rect(rect);
+                if show_info {
+                    let opacity = ui.painter().opacity();
+                    ui.disable();
+                    ui.set_opacity(opacity);
+                }
+                tracklist(
+                    ui,
+                    open,
+                    channel.and_then(|c| c.image.as_deref()),
+                    tracks,
+                    state,
+                    back,
+                    scroll,
+                    keyed && !show_info,
+                    acts,
+                );
+            },
+        );
+    }
+    if show_info || transition.is_some() {
+        let at = rect.translate(snap(ui, vec2((1.0 - shown) * rect.width(), 0.0)));
+        let acts = if show_info { actions } else { &mut ignored };
+        ui.scope_builder(
+            egui::UiBuilder::new()
+                .max_rect(at)
+                .id_salt(("info", &open.slug)),
+            |ui| {
+                ui.shrink_clip_rect(rect);
+                if !show_info {
+                    let opacity = ui.painter().opacity();
+                    ui.disable();
+                    ui.set_opacity(opacity);
+                }
+                ui.painter().rect_filled(at, 0.0, pal.bg);
+                if shown < 1.0 {
+                    ui.painter().vline(
+                        at.left(),
+                        at.y_range(),
+                        egui::Stroke::new(1.0, pal.hairline),
+                    );
+                }
+                channel_info(ui, open, channel, acts);
+            },
+        );
+        if !show_info {
+            ui.interact(
+                at.intersect(rect).intersect(ui.clip_rect()),
+                ui.id().with(("closing-info-shield", &open.slug)),
+                Sense::click_and_drag(),
+            );
+        }
+    }
+}
+
 impl App {
     fn poll_updates(&mut self) {
         self.library.poll_updates();
@@ -369,7 +475,14 @@ impl App {
             self.player.update();
         }
         let s = &self.player.state;
-        if s.index.is_some() && (s.queue.clone(), s.index) != before {
+        if s.index.is_some()
+            && (s.queue.clone(), s.index) != before
+            && !self
+                .nav
+                .search
+                .as_ref()
+                .is_some_and(|s| matches!(&s.target, SearchTarget::Tracks(_)))
+        {
             self.track_scroll.reveal = Some(Reveal::Glide);
         }
         // Let go of a finished scrub once mpv reports the new spot, or gives up on it.
@@ -388,7 +501,6 @@ impl App {
 
     fn read_keyboard(&mut self, ctx: &egui::Context) {
         let typing = self.nav.typing();
-        let overview = self.nav.overview(ctx.content_rect().width() >= WIDE);
         let tabbed = ctx.memory(|m| m.focused()).is_some();
         ctx.input_mut(|i| {
             let mut key = |k, a| {
@@ -406,8 +518,15 @@ impl App {
                 key(Key::Backspace, Action::Back);
                 key(Key::M, Action::ToggleMute);
             }
-            if overview {
-                key(Key::Slash, Action::Search);
+            if !self.nav.show_now_playing && !typing {
+                let target = self
+                    .nav
+                    .open_channel
+                    .as_ref()
+                    .map_or(SearchTarget::Channels, |open| {
+                        SearchTarget::Tracks(open.clone())
+                    });
+                key(Key::Slash, Action::Search(target));
             }
             key(Key::Escape, Action::Back);
             // Up and down are the iPod's wheel: volume, while the now-playing view is up.
@@ -502,9 +621,15 @@ impl App {
                 self.keyboard_cursor = true;
                 let (len, scroll) = match (&mut self.nav.search, &self.nav.open_channel) {
                     (Some(search), _) => (
-                        match self.library.channels() {
-                            Some(Ok(l)) => matching(&search.query, l).len(),
-                            _ => 0,
+                        match &search.target {
+                            SearchTarget::Channels => match self.library.channels() {
+                                Some(Ok(l)) => matching(&search.query, l).len(),
+                                _ => 0,
+                            },
+                            SearchTarget::Tracks(open) => match self.library.tracks(&open.slug) {
+                                Some(Ok(l)) => matching_tracks(&search.query, l).len(),
+                                _ => 0,
+                            },
                         },
                         &mut search.scroll,
                     ),
@@ -530,11 +655,28 @@ impl App {
                 }
             }
             Action::Choose if !self.nav.show_now_playing && self.nav.search.is_some() => {
-                if let (Some(search), Some(Ok(list))) = (&self.nav.search, self.library.channels())
-                    && let Some(&i) = matching(&search.query, list).get(search.scroll.cursor)
-                {
-                    let a = Action::Open(list[i].slug.clone(), list[i].name.clone());
-                    self.dispatch(ctx, a);
+                let search = self.nav.search.as_ref().unwrap();
+                let action = match &search.target {
+                    SearchTarget::Channels => self
+                        .library
+                        .channels()
+                        .and_then(Result::ok)
+                        .and_then(|list| {
+                            let i = *matching(&search.query, list).get(search.scroll.cursor)?;
+                            Some(Action::Open(list[i].slug.clone(), list[i].name.clone()))
+                        }),
+                    SearchTarget::Tracks(open) => self
+                        .library
+                        .tracks(&open.slug)
+                        .and_then(Result::ok)
+                        .and_then(|list| {
+                            let i =
+                                *matching_tracks(&search.query, list).get(search.scroll.cursor)?;
+                            Some(Action::PlayTrack(open.clone(), i))
+                        }),
+                };
+                if let Some(action) = action {
+                    self.dispatch(ctx, action);
                 }
             }
             Action::Choose if !self.nav.show_now_playing => match &self.nav.open_channel {
@@ -585,10 +727,11 @@ impl App {
             }
             Action::Info => self.nav.toggle_info(),
             Action::ShowNow => self.nav.set_now_playing(self.player.state.queue.is_some()),
-            Action::Search => {
+            Action::Search(target) => {
                 self.scrolling.stop();
-                self.nav.search = Some(Search::default());
+                self.nav.search = Some(Search::new(target));
             }
+            Action::PlayTrack(open, index) => self.play(&open.slug, &open.name, index),
             Action::Play(index) => {
                 self.track_scroll.cursor = index;
                 if let Some(o) = &self.nav.open_channel {
@@ -674,7 +817,14 @@ impl App {
         // The demo's player stands still, so follow the tap by hand.
         if self.demo {
             self.player.state.index = Some(index);
-            self.track_scroll.reveal = Some(Reveal::Glide);
+            if !self
+                .nav
+                .search
+                .as_ref()
+                .is_some_and(|s| matches!(&s.target, SearchTarget::Tracks(_)))
+            {
+                self.track_scroll.reveal = Some(Reveal::Glide);
+            }
             return;
         }
         let Some(Ok(list)) = self.library.tracks(slug) else {

@@ -55,9 +55,9 @@ pub(super) fn row(
     if !ui.is_rect_visible(rect) {
         return (r, None);
     }
-    let fill = if selected {
+    let fill = if selected || (avatar.is_some() && r.has_focus()) {
         pal.selected
-    } else if r.contains_pointer() || r.has_focus() {
+    } else if avatar.is_none() && (r.contains_pointer() || r.has_focus()) {
         pal.hover
     } else {
         Color32::TRANSPARENT

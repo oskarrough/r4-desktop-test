@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 /// How long a view takes to slide over the one under it, or back off it.
 const SLIDE: Duration = Duration::from_millis(280);
 
+#[derive(Clone)]
 pub(super) struct ChannelRef {
     pub(super) slug: String,
     pub(super) name: String,
@@ -15,6 +16,7 @@ pub(super) struct ChannelRef {
 pub(super) struct Nav {
     pub(super) open_channel: Option<ChannelRef>,
     pub(super) show_channel_info: bool,
+    pub(super) info_transition: Option<Slide>,
     pub(super) departing_channel: Option<ChannelRef>,
     pub(super) channel_transition: Option<Slide>,
     pub(super) show_now_playing: bool,
@@ -29,6 +31,7 @@ impl Nav {
         }
         self.open_channel = Some(channel);
         self.show_channel_info = false;
+        self.info_transition = None;
         self.set_now_playing(false);
         self.search = None;
     }
@@ -38,8 +41,9 @@ impl Nav {
         } else if self.search.is_some() {
             self.search = None;
         } else if self.show_channel_info {
-            self.show_channel_info = false;
+            self.set_info(false);
         } else if self.open_channel.is_some() {
+            self.info_transition = None;
             self.departing_channel = self.open_channel.take();
             self.channel_transition = Some(Slide::start(false, self.channel_transition));
         }
@@ -50,14 +54,18 @@ impl Nav {
             self.show_now_playing = now;
         }
     }
+    pub(super) fn set_info(&mut self, show: bool) {
+        let show = self.open_channel.is_some() && show;
+        if show != self.show_channel_info {
+            self.info_transition = Some(Slide::start(show, self.info_transition));
+            self.show_channel_info = show;
+        }
+    }
     pub(super) fn toggle_info(&mut self) {
-        self.show_channel_info = self.open_channel.is_some() && !self.show_channel_info;
+        self.set_info(!self.show_channel_info);
     }
     pub(super) fn typing(&self) -> bool {
         self.search.is_some() && !self.show_now_playing
-    }
-    pub(super) fn overview(&self, wide: bool) -> bool {
-        !self.show_now_playing && self.search.is_none() && (self.open_channel.is_none() || wide)
     }
     pub(super) fn channel_list_focused(&self) -> bool {
         self.open_channel.is_none() && self.search.is_none() && !self.show_now_playing
@@ -67,10 +75,16 @@ impl Nav {
             self.channel_transition = None;
             self.departing_channel = None;
         }
+        if self.info_transition.is_some_and(|s| s.done()) {
+            self.info_transition = None;
+        }
         if self.now_playing_transition.is_some_and(|s| s.done()) {
             self.now_playing_transition = None;
         }
-        if self.channel_transition.is_some() || self.now_playing_transition.is_some() {
+        if self.channel_transition.is_some()
+            || self.info_transition.is_some()
+            || self.now_playing_transition.is_some()
+        {
             ctx.request_repaint();
         }
     }
@@ -119,6 +133,7 @@ pub(super) fn ease(t: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::browse::SearchTarget;
     #[test]
     fn turning_back_mid_slide_picks_up_where_it_was() {
         let half = Slide {
@@ -140,7 +155,7 @@ mod tests {
                 name: "Radio Oskar".into(),
             }),
             show_channel_info: true,
-            search: Some(Search::default()),
+            search: Some(Search::new(SearchTarget::Channels)),
             show_now_playing: true,
             ..Nav::default()
         };
@@ -182,7 +197,7 @@ mod tests {
         };
         let mut nav = Nav {
             show_channel_info: true,
-            search: Some(Search::default()),
+            search: Some(Search::new(SearchTarget::Channels)),
             show_now_playing: true,
             channel_transition: Some(channel_slide),
             now_playing_transition: Some(now_playing_slide),
@@ -204,5 +219,87 @@ mod tests {
         assert!(!now_playing.over);
         assert!((channel.shown() - channel_slide.shown()).abs() < 0.01);
         assert!((now_playing.shown() - now_playing_slide.shown()).abs() < 0.01);
+    }
+
+    #[test]
+    fn details_requires_a_channel_and_reverses_without_jumping() {
+        let mut nav = Nav::default();
+        nav.toggle_info();
+        assert!(!nav.show_channel_info);
+        assert!(nav.info_transition.is_none());
+        nav.open(ChannelRef {
+            slug: "oskar".into(),
+            name: "Radio Oskar".into(),
+        });
+        nav.toggle_info();
+        assert!(nav.show_channel_info);
+        assert!(nav.info_transition.unwrap().over);
+
+        let entering = Slide {
+            at: Instant::now() - SLIDE / 2,
+            over: true,
+        };
+        nav.info_transition = Some(entering);
+        nav.back();
+        assert!(!nav.show_channel_info);
+        let leaving = nav.info_transition.unwrap();
+        assert!(!leaving.over);
+        assert!((leaving.shown() - entering.shown()).abs() < 0.01);
+
+        nav.toggle_info();
+        assert!(nav.show_channel_info);
+        let returning = nav.info_transition.unwrap();
+        assert!(returning.over);
+        assert!((returning.shown() - leaving.shown()).abs() < 0.01);
+    }
+
+    #[test]
+    fn leaving_or_reopening_a_channel_discards_its_details_transition() {
+        let mut nav = Nav::default();
+        nav.open(ChannelRef {
+            slug: "oskar".into(),
+            name: "Radio Oskar".into(),
+        });
+        nav.toggle_info();
+        nav.back();
+        assert!(nav.info_transition.is_some());
+        nav.back();
+        assert!(nav.open_channel.is_none());
+        assert!(!nav.show_channel_info);
+        assert!(nav.info_transition.is_none());
+        assert!(!nav.channel_transition.unwrap().over);
+
+        nav.open(ChannelRef {
+            slug: "oskar".into(),
+            name: "Radio Oskar".into(),
+        });
+        nav.toggle_info();
+        nav.open(ChannelRef {
+            slug: "other".into(),
+            name: "Other channel".into(),
+        });
+        assert_eq!(nav.open_channel.as_ref().unwrap().slug, "other");
+        assert!(!nav.show_channel_info);
+        assert!(nav.info_transition.is_none());
+    }
+
+    #[test]
+    fn finished_details_transition_leaves_the_destination_selected() {
+        let mut nav = Nav {
+            open_channel: Some(ChannelRef {
+                slug: "oskar".into(),
+                name: "Radio Oskar".into(),
+            }),
+            show_channel_info: true,
+            info_transition: Some(Slide {
+                at: Instant::now() - SLIDE,
+                over: true,
+            }),
+            ..Nav::default()
+        };
+        nav.finish_transitions(&egui::Context::default());
+        assert!(nav.show_channel_info);
+        assert!(nav.info_transition.is_none());
+        assert_eq!(nav.open_channel.as_ref().unwrap().slug, "oskar");
     }
 }

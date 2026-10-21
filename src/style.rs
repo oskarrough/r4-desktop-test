@@ -201,6 +201,8 @@ pub fn install(ctx: &egui::Context) {
         style.interaction.selectable_labels = false;
         // Views place things on the grid themselves; egui's gaps between widgets would push them off it.
         style.spacing.item_spacing = egui::vec2(2.0 * UNIT, 0.0);
+        // Lists draw their own header and dock fades.
+        style.spacing.scroll.fade.strength = 0.0;
     });
     apply(ctx, Palette::dark());
 }
