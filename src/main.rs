@@ -6,6 +6,11 @@ fn main() {
         eprintln!("usage: radio4000 <url>");
         std::process::exit(2);
     };
+    if url == "--version" || url == "-V" {
+        // Release builds bake in latest-<sha>; see .github/workflows/release.yml.
+        println!("radio4000 {}", option_env!("RADIO4000_VERSION").unwrap_or("dev"));
+        return;
+    }
 
     let mpv = Mpv::with_initializer(|init| {
         init.set_option("vid", "no")?;
