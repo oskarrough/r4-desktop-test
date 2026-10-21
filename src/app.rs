@@ -41,7 +41,8 @@ pub fn run() -> eframe::Result {
     let memory = crate::window::Memory::load(demo.is_some());
     let viewport = egui::ViewportBuilder::default()
         .with_inner_size([280.0, 420.0])
-        .with_min_inner_size([180.0, 200.0]);
+        .with_min_inner_size([180.0, 200.0])
+        .with_icon(icon());
     let options = eframe::NativeOptions {
         viewport: memory.geometry.apply(viewport),
         ..Default::default()
@@ -107,6 +108,16 @@ pub fn run() -> eframe::Result {
             Ok(Box::new(app))
         }),
     )
+}
+
+/// The window and taskbar icon. On macOS an empty one leaves the bundle's icon in the Dock,
+/// where eframe would otherwise put its own.
+fn icon() -> egui::IconData {
+    if cfg!(target_os = "macos") {
+        return egui::IconData::default();
+    }
+    eframe::icon_data::from_png_bytes(include_bytes!("../assets/radio4000.png"))
+        .expect("the embedded icon is a PNG")
 }
 
 struct App {

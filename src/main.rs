@@ -1,4 +1,6 @@
 //! With a URL, play its audio via libmpv + yt-dlp and exit when it ends. Without one, open the channel list.
+// Release builds open no console window on Windows. `--version` still prints when its output is captured.
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 use libmpv2::events::Event;
 
 mod app;

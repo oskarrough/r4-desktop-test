@@ -97,8 +97,16 @@ mkdir -p "$bin_dir"
 if [ -n "$bundle" ]; then
 	# Swap whole folders. A copy that's still playing keeps its loaded libraries, and its
 	# helpers' paths now point into the new folder.
-	app="$bin_dir/.radio4000/$(basename "$bundle")"
-	mkdir -p "$bin_dir/.radio4000"
+	# Macs open apps from Applications; elsewhere the bundle stays out of sight beside the link.
+	if [ "$os" = Darwin ]; then
+		apps="${RADIO4000_APP_DIR:-$HOME/Applications}"
+		# Releases before this kept the app hidden beside the link.
+		rm -rf "$bin_dir/.radio4000"
+	else
+		apps="$bin_dir/.radio4000"
+	fi
+	app="$apps/$(basename "$bundle")"
+	mkdir -p "$apps"
 	rm -rf "$app.new" "$app.old"
 	mv "$bundle" "$app.new"
 	if [ -e "$app" ]; then mv "$app" "$app.old"; fi
@@ -107,6 +115,14 @@ if [ -n "$bundle" ]; then
 	# Resolve relative RADIO4000_BIN_DIR values before making the link.
 	app="$(cd "$app" && pwd)"
 	ln -sfn "$app/$entry" "$bin_dir/radio4000"
+	if [ "$os" = Linux ]; then
+		# A launcher entry with the icon, so the app opens like any other.
+		data="${XDG_DATA_HOME:-$HOME/.local/share}"
+		mkdir -p "$data/applications" "$data/icons/hicolor/scalable/apps"
+		cp "$app/usr/share/icons/hicolor/scalable/apps/radio4000.svg" "$data/icons/hicolor/scalable/apps/"
+		sed "s|^Exec=.*|Exec=\"$app/$entry\"|" "$app/radio4000.desktop" >"$data/applications/radio4000.desktop"
+		update-desktop-database "$data/applications" 2>/dev/null || true
+	fi
 else
 	# Move rather than copy over, so updating works while the old binary is playing.
 	mv -f "$new" "$bin_dir/radio4000"

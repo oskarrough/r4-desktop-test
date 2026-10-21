@@ -61,6 +61,12 @@
 	} finally {
 		Remove-Item -Recurse -Force $tmp
 	}
+	# A Start Menu entry, so the app opens from Start and search like any other. The exe holds the icon.
+	$shortcut = (New-Object -ComObject WScript.Shell).CreateShortcut((Join-Path ([Environment]::GetFolderPath('Programs')) 'Radio4000.lnk'))
+	$shortcut.TargetPath = "$binDir\radio4000.exe"
+	$shortcut.WorkingDirectory = $binDir
+	$shortcut.Save()
+
 	if ($oldVersion -eq $newVersion) {
 		Write-Host "Reinstalled radio4000 $newVersion in $binDir"
 	} elseif ($oldVersion) {
