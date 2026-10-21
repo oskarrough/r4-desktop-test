@@ -26,7 +26,10 @@ const AVATAR: f32 = 6.0 * UNIT;
 /// How long the tracklist takes to glide to the playing track.
 const GLIDE: Duration = Duration::from_millis(240);
 /// The mini player's height; it floats this far plus a gap above the bottom.
-const DOCK: f32 = 14.0 * UNIT;
+const DOCK: f32 = 12.0 * UNIT;
+/// The mini player's corners: superellipses this large, softer than a circle's quarter.
+const SQUIRCLE: f32 = 6.0 * UNIT;
+const SQUIRCLE_POWER: f32 = 4.0;
 /// How long the volume meter stays up after a change, and how long it then takes to fade.
 const METER: Duration = Duration::from_millis(1200);
 const FADE: Duration = Duration::from_millis(300);
@@ -577,7 +580,7 @@ fn dock(
     mesh.add_triangle(0, 1, 2);
     mesh.add_triangle(1, 3, 2);
     p.add(mesh);
-    let round = DOCK / 2.0;
+    let round = SQUIRCLE;
     p.add(
         egui::Shadow {
             offset: [0, 4],
@@ -585,46 +588,42 @@ fn dock(
             spread: 0,
             color: Color32::from_black_alpha(96),
         }
-        .as_shape(rect, round),
+        .as_shape(rect, round * 0.6),
     );
     let open = ui.interact(rect, ui.id().with("dock"), Sense::click());
     let fill = if open.hovered() { SELECTED } else { SURFACE };
-    ui.painter().rect(
-        rect,
-        round,
-        fill,
-        egui::Stroke::new(1.0, EDGE),
-        egui::StrokeKind::Inside,
-    );
+    squircle(ui, rect, round, fill, EDGE);
     if open.clicked() && s.queue.is_some() {
         actions.push(Action::ShowNow);
     }
 
-    // The top edge between the round ends is the seek line: it fills with the track and thickens to be dragged.
+    // The top edge between the corners is the seek line: it fills with the track and thickens to be dragged.
     let edge = Rect::from_min_size(
         pos2(rect.left() + round, rect.top()),
         vec2(rect.width() - 2.0 * round, 2.0 * UNIT),
     );
     seek(ui, edge, true, LINE, s, scrub, actions);
 
-    // The face sits concentric with the capsule's round end; the buttons mirror it at the other.
+    // The face sits as far in from the left as from the top and bottom; next mirrors it at the right.
     let cy = rect.center().y;
-    let size = DOCK - 4.0 * UNIT;
+    let inset = 2.0 * UNIT;
+    let size = DOCK - 2.0 * inset;
+    let side = inset + size / 2.0;
     face(
         ui,
-        Rect::from_center_size(pos2(rect.left() + round, cy), vec2(size, size)),
+        Rect::from_center_size(pos2(rect.left() + side, cy), vec2(size, size)),
         image,
         &s.channel,
     );
 
-    let next = pos2(rect.right() - round, cy);
+    let next = pos2(rect.right() - side, cy);
     let play = next - vec2(HIT, 0.0);
     if icon_button(ui, Icon::Next, next, ICON, s.queue.is_some()).clicked() {
         actions.push(Action::Send(Command::Next));
     }
     play_button(ui, s, play, ICON, actions);
 
-    let x = rect.left() + DOCK + UNIT;
+    let x = rect.left() + inset + size + inset;
     let width = play.x - HIT / 2.0 - x;
     if let Some(e) = &s.error {
         let g = fit(
@@ -653,6 +652,45 @@ fn dock(
         x,
         cy + 2.0 * UNIT,
     );
+}
+
+/// A rectangle with superellipse corners, filled, with a hairline edge just inside it.
+/// The edge is the outer shape showing round a 1px smaller inner one: two fills, no stroke joins to spike.
+fn squircle(ui: &Ui, rect: Rect, r: f32, fill: Color32, edge: Color32) {
+    let p = ui.painter();
+    p.add(egui::Shape::convex_polygon(
+        squircle_outline(rect, r),
+        edge,
+        egui::Stroke::NONE,
+    ));
+    p.add(egui::Shape::convex_polygon(
+        squircle_outline(rect.shrink(1.0), r - 1.0),
+        fill,
+        egui::Stroke::NONE,
+    ));
+}
+
+/// The outline clockwise from the top edge's right end, each corner swept from one straight edge to the next.
+fn squircle_outline(rect: Rect, r: f32) -> Vec<Pos2> {
+    let e = 2.0 / SQUIRCLE_POWER;
+    let mut points = Vec::new();
+    for (c, sx, sy, reverse) in [
+        (pos2(rect.right() - r, rect.top() + r), 1.0, -1.0, true),
+        (pos2(rect.right() - r, rect.bottom() - r), 1.0, 1.0, false),
+        (pos2(rect.left() + r, rect.bottom() - r), -1.0, 1.0, true),
+        (pos2(rect.left() + r, rect.top() + r), -1.0, -1.0, false),
+    ] {
+        for k in 0..=16 {
+            let t = k as f32 / 16.0;
+            let a = if reverse { 1.0 - t } else { t } * std::f32::consts::FRAC_PI_2;
+            // cos(π/2) comes out a hair below zero, and its root would be NaN.
+            let (x, y) = (a.cos().max(0.0).powf(e), a.sin().max(0.0).powf(e));
+            points.push(c + vec2(sx * r * x, sy * r * y));
+        }
+    }
+    // Corners as tall as half the rectangle meet at a shared point.
+    points.dedup_by(|a, b| a.distance(*b) < 0.01);
+    points
 }
 
 /// A stroke clockwise from twelve o'clock, `frac` of the way round.
