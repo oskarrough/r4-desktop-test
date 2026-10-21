@@ -4,13 +4,13 @@ Native Radio4000 player. Right now just a playback spike: play the audio of one 
 
 ## Install
 
-Every push to main replaces the [latest release](https://github.com/oskarrough/r4-desktop-test/releases/tag/latest). Download the archive for your system and unpack it.
+There are no versioned releases yet. Every push to main rebuilds the [`latest`](https://github.com/oskarrough/r4-desktop-test/releases/tag/latest) release:
 
-- Linux: needs libmpv and yt-dlp (`sudo apt install libmpv2 yt-dlp`, or your distro's mpv package).
-- macOS (Apple Silicon): `brew install mpv yt-dlp`. The binary is unsigned, so clear the quarantine flag once: `xattr -d com.apple.quarantine radio4000`.
-- Windows: the zip ships `libmpv-2.dll` next to `radio4000.exe`; keep them together. Install yt-dlp with `winget install yt-dlp`.
+- [Linux](https://github.com/oskarrough/r4-desktop-test/releases/download/latest/radio4000-linux-x86_64.tar.gz)
+- [macOS (Apple Silicon)](https://github.com/oskarrough/r4-desktop-test/releases/download/latest/radio4000-macos-arm64.tar.gz)
+- [Windows](https://github.com/oskarrough/r4-desktop-test/releases/download/latest/radio4000-windows-x86_64.zip)
 
-Then run `./radio4000 <url>`.
+Unpack and run `radio4000 <url>`. Needs yt-dlp, plus mpv on Linux and macOS (see below).
 
 ## Running from source
 
