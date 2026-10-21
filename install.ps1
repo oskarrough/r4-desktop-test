@@ -17,6 +17,16 @@
 	}
 	$asset = 'radio4000-windows-x86_64.zip'
 
+	# radio4000.exe is a windowed app: Windows PowerShell neither waits for it nor reads what it
+	# prints, so it runs through Start-Process into a file. Nothing comes back from a build that won't run.
+	function Get-Version($exe) {
+		$out = Join-Path $tmp 'version.txt'
+		try {
+			$process = Start-Process $exe -ArgumentList '--version' -NoNewWindow -Wait -PassThru -RedirectStandardOutput $out
+		} catch { return }
+		if ($process.ExitCode -eq 0 -and "$(Get-Content $out -Raw)" -match '^radio4000 (\S+)') { $Matches[1] }
+	}
+
 	$tmp = Join-Path ([IO.Path]::GetTempPath()) ([IO.Path]::GetRandomFileName())
 	New-Item -ItemType Directory -Path $tmp | Out-Null
 	try {
@@ -32,16 +42,13 @@
 		Expand-Archive "$tmp\$asset" -DestinationPath "$tmp\new"
 
 		# Make sure the new build runs (libmpv ships beside it) before it replaces the old one.
-		$out = try { "$(& "$tmp\new\radio4000.exe" --version)" } catch { '' }
-		if ($LASTEXITCODE -ne 0 -or $out -notmatch '^radio4000 (.+)$') {
-			throw "radio4000: the downloaded radio4000 doesn't run; kept the old install"
-		}
-		$newVersion = $Matches[1]
+		$newVersion = Get-Version "$tmp\new\radio4000.exe"
+		if (-not $newVersion) { throw "radio4000: the downloaded radio4000 doesn't run; kept the old install" }
 		# Builds from before --version existed print something else; treat them as unknown.
 		$oldVersion = $null
 		if (Test-Path "$binDir\radio4000.exe") {
-			$out = try { "$(& "$binDir\radio4000.exe" --version 2>$null)" } catch { '' }
-			$oldVersion = if ($out -match '^radio4000 (.+)$') { $Matches[1] } else { '(older build)' }
+			$oldVersion = Get-Version "$binDir\radio4000.exe"
+			if (-not $oldVersion) { $oldVersion = '(older build)' }
 		}
 
 		# Install everything the zip holds (the exe and the mpv DLL it loads), replacing the old copy.
@@ -59,7 +66,8 @@
 			Move-Item $file.FullName $dest -Force
 		}
 	} finally {
-		Remove-Item -Recurse -Force $tmp
+		# Quietly, so a failure above isn't replaced by a file Windows still holds.
+		Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
 	}
 	# A Start Menu entry, so the app opens from Start and search like any other. The exe holds the icon.
 	$shortcut = (New-Object -ComObject WScript.Shell).CreateShortcut((Join-Path ([Environment]::GetFolderPath('Programs')) 'Radio4000.lnk'))
