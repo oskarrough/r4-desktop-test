@@ -20,7 +20,7 @@ Windows:
 irm https://raw.githubusercontent.com/oskarrough/r4-desktop-test/main/install.ps1 | iex
 ```
 
-Run the same line again to update.
+Run the same line again to update. Radio4000 then opens from your app launcher, Applications on a Mac, or the Start Menu on Windows.
 
 Linux downloads include everything needed to play on Ubuntu 24.04 or newer, and similar desktop systems. You can also download the [AppImage](https://github.com/oskarrough/r4-desktop-test/releases/download/latest/radio4000-x86_64.AppImage) directly.
 

@@ -38,6 +38,7 @@ esac
         "TEST_SUMS": str(sums),
         "TEST_ARCHIVE": str(archive),
         "RADIO4000_BIN_DIR": str(directory / "bin"),
+        "XDG_DATA_HOME": str(directory / "share"),
     }
 
     def install():
@@ -49,6 +50,9 @@ esac
     assert executable.is_symlink()
     assert subprocess.check_output([str(executable), "--version"], text=True).startswith("radio4000 ")
     target = executable.resolve()
+    entry = (directory / "share/applications/radio4000.desktop").read_text()
+    assert f'Exec="{os.readlink(executable)}"' in entry, entry
+    assert (directory / "share/icons/hicolor/scalable/apps/radio4000.svg").is_file()
     leftover = target.parents[2].with_name(target.parents[2].name + ".old")
     leftover.mkdir()
     second = install()
@@ -61,4 +65,4 @@ esac
     assert "checksum mismatch" in rejected.stderr
     assert executable.resolve() == target
 
-print("Installer: install, reinstall, leftover cleanup, spaces/commas, and failed-update preservation passed")
+print("Installer: install, launcher entry, reinstall, leftover cleanup, spaces/commas, and failed-update preservation passed")

@@ -5,7 +5,7 @@ cd "$(dirname "$0")/.."
 stage="$PWD/target/package-macos"
 app="$stage/Radio4000.app"
 rm -rf "$stage"
-mkdir -p "$app/Contents/MacOS" "$app/Contents/Frameworks"
+mkdir -p "$app/Contents/MacOS" "$app/Contents/Frameworks" "$app/Contents/Resources"
 cp target/release/radio4000 "$app/Contents/MacOS/"
 cat >"$app/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -15,10 +15,19 @@ cat >"$app/Contents/Info.plist" <<'PLIST'
 <key>CFBundleIdentifier</key><string>org.radio4000.desktop</string>
 <key>CFBundleExecutable</key><string>radio4000</string>
 <key>CFBundlePackageType</key><string>APPL</string>
+<key>CFBundleIconFile</key><string>radio4000</string>
 <key>CFBundleVersion</key><string>1</string>
 <key>NSHighResolutionCapable</key><true/>
 </dict></plist>
 PLIST
+# iconutil reads only these sizes, each with an @2x.
+iconset="$stage/radio4000.iconset"
+mkdir -p "$iconset"
+for size in 16 32 128 256 512; do
+    sips -z $size $size assets/radio4000-macos.png --out "$iconset/icon_${size}x${size}.png" >/dev/null
+    sips -z $((size * 2)) $((size * 2)) assets/radio4000-macos.png --out "$iconset/icon_${size}x${size}@2x.png" >/dev/null
+done
+iconutil -c icns "$iconset" -o "$app/Contents/Resources/radio4000.icns"
 dylibbundler -od -b -x "$app/Contents/MacOS/radio4000" \
     -d "$app/Contents/Frameworks" -p '@executable_path/../Frameworks/'
 # dylibbundler points every rpath at Frameworks, and dyld refuses a library that lists one twice.

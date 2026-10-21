@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Render the committed icons from the SVGs in assets/; requires ImageMagick 7 with rsvg.
+set -euo pipefail
+cd "$(dirname "$0")/../assets"
+# The window and taskbar icon, which the app embeds.
+magick -background none -density 192 radio4000.svg -resize 256x256 radio4000.png
+# The exe icon; Windows picks the size it needs from these.
+magick -background none -density 192 radio4000.svg -define icon:auto-resize=256,128,64,48,32,24,16 radio4000.ico
+# macOS makes its .icns from this at packaging time, since iconutil exists only there.
+magick -background none -density 192 radio4000-macos.svg -resize 1024x1024 radio4000-macos.png

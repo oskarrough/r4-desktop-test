@@ -114,10 +114,13 @@ jobs:
         run: |
           # Run the exe from the unpacked zip with --version: a missing DLL fails before main.
           Expand-Archive target/${{ matrix.asset }} -DestinationPath smoke
-          & smoke\radio4000.exe --version
-          if ($LASTEXITCODE -ne 0) { throw "radio4000.exe --version exited $LASTEXITCODE" }
-          & smoke\radio4000.exe --check-playback
+          # It's a windowed exe: PowerShell only waits for it, and shows what it prints, when the output is captured.
+          $version = & smoke\radio4000.exe --version | Out-String
+          if ($LASTEXITCODE -ne 0 -or $version -notmatch '^radio4000 ') { throw "radio4000.exe --version exited $LASTEXITCODE with '$version'" }
+          Write-Host $version
+          $playback = & smoke\radio4000.exe --check-playback | Out-String
           if ($LASTEXITCODE -ne 0) { throw "bundled playback failed" }
+          Write-Host $playback
           $global:LASTEXITCODE = 0
 
       - uses: actions/upload-artifact@v7
