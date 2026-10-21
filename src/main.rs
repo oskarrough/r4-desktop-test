@@ -1,14 +1,23 @@
-//! Playback spike: play the audio of one URL via libmpv + yt-dlp, exit when it ends.
+//! With a URL, play its audio via libmpv + yt-dlp and exit when it ends. Without one, open the channel list.
 use libmpv2::{Mpv, events::Event};
+
+mod channels;
+mod gui;
 
 fn main() {
     let Some(url) = std::env::args().nth(1) else {
-        eprintln!("usage: radio4000 <url>");
-        std::process::exit(2);
+        if let Err(e) = gui::run() {
+            eprintln!("radio4000: {e}");
+            std::process::exit(1);
+        }
+        return;
     };
     if url == "--version" || url == "-V" {
         // Release builds bake in latest-<sha>; see .github/workflows/release.yml.
-        println!("radio4000 {}", option_env!("RADIO4000_VERSION").unwrap_or("dev"));
+        println!(
+            "radio4000 {}",
+            option_env!("RADIO4000_VERSION").unwrap_or("dev")
+        );
         return;
     }
 
