@@ -11,7 +11,7 @@ pub const MARGIN: f32 = 4.0 * UNIT;
 /// Times, and the line under a title.
 pub const SMALL: f32 = 11.0;
 /// Rows, headers, the transport's title.
-pub const BODY: f32 = 14.0;
+pub const BODY: f32 = 13.0;
 /// The now-playing title.
 pub const LARGE: f32 = 18.0;
 
