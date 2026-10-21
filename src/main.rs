@@ -23,7 +23,7 @@ fn main() {
         return;
     }
 
-    let mpv = player::mpv().expect("failed to create mpv");
+    let mpv = player::mpv(&[]).expect("failed to create mpv");
 
     mpv.command("loadfile", &[&url]).expect("loadfile failed");
 

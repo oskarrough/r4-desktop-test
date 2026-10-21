@@ -2,7 +2,9 @@
 
 Native Radio4000 player, but mostly exploring building native apps with rust. 
 
-Play the audio of one URL through libmpv, which resolves YouTube and friends.
+Pick a channel, play its tracks. Audio goes through libmpv, which resolves YouTube and friends.
+
+Keys: Space play/pause, n/p next/previous, left/right seek 10s, Esc back.
 
 ## Install
 
@@ -30,6 +32,8 @@ Run the same line again to update.
 ```sh
 cargo run
 ```
+
+Opens the player. With a URL, `cargo run -- https://www.youtube.com/watch?v=1JLVbkHieaM`, it plays just that track without a window: prints `playing: <title>` when the track loads and `ended: <reason>` when it stops. Ctrl-C quits.
 
 Needs libmpv to link against and `yt-dlp` on `PATH`.
 
