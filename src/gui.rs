@@ -1,5 +1,6 @@
 //! The window shown when the app opens without a URL: R4 channels, newest activity first.
 use crate::channels::{self, Channel};
+use crate::tracks::{self, Track};
 use std::sync::mpsc;
 
 pub fn run() -> eframe::Result {
@@ -20,7 +21,11 @@ pub fn run() -> eframe::Result {
                 let _ = tx.send(channels::fetch());
                 ctx.request_repaint();
             });
-            Ok(Box::new(App { rx, channels: None }))
+            Ok(Box::new(App {
+                rx,
+                channels: None,
+                open: None,
+            }))
         }),
     )
 }
@@ -28,6 +33,30 @@ pub fn run() -> eframe::Result {
 struct App {
     rx: mpsc::Receiver<Result<Vec<Channel>, String>>,
     channels: Option<Result<Vec<Channel>, String>>,
+    open: Option<Open>,
+}
+
+/// The channel being looked at, with its tracks once they arrive.
+struct Open {
+    name: String,
+    rx: mpsc::Receiver<Result<Vec<Track>, String>>,
+    tracks: Option<Result<Vec<Track>, String>>,
+}
+
+impl Open {
+    fn new(ctx: &egui::Context, c: &Channel) -> Self {
+        let (tx, rx) = mpsc::channel();
+        let (ctx, slug) = (ctx.clone(), c.slug.clone());
+        std::thread::spawn(move || {
+            let _ = tx.send(tracks::fetch(&slug));
+            ctx.request_repaint();
+        });
+        Open {
+            name: c.name.clone(),
+            rx,
+            tracks: None,
+        }
+    }
 }
 
 impl eframe::App for App {
@@ -35,7 +64,36 @@ impl eframe::App for App {
         if let Ok(result) = self.rx.try_recv() {
             self.channels = Some(result);
         }
+        if let Some(open) = &mut self.open
+            && let Ok(result) = open.rx.try_recv()
+        {
+            open.tracks = Some(result);
+        }
+        let mut back = false;
+        let mut clicked = None;
         egui::CentralPanel::default().show(ui, |ui| {
+            if let Some(open) = &self.open {
+                ui.horizontal(|ui| {
+                    back = ui.button("< Channels").clicked();
+                    ui.heading(&open.name);
+                });
+                match &open.tracks {
+                    None => {
+                        ui.spinner();
+                    }
+                    Some(Err(e)) => {
+                        ui.label(format!("Could not load tracks: {e}"));
+                    }
+                    Some(Ok(list)) => {
+                        egui::ScrollArea::vertical().show(ui, |ui| {
+                            for t in list {
+                                ui.label(t.title.as_deref().unwrap_or(&t.url));
+                            }
+                        });
+                    }
+                }
+                return;
+            }
             ui.heading("Radio4000");
             match &self.channels {
                 None => {
@@ -48,7 +106,9 @@ impl eframe::App for App {
                     egui::ScrollArea::vertical().show(ui, |ui| {
                         for c in list {
                             ui.horizontal(|ui| {
-                                ui.strong(&c.name);
+                                if ui.link(&c.name).clicked() {
+                                    clicked = Some(c);
+                                }
                                 ui.weak(format!("@{}", c.slug));
                                 if let Some(at) = &c.latest_track_at {
                                     ui.weak(at.get(..10).unwrap_or(at));
@@ -59,5 +119,11 @@ impl eframe::App for App {
                 }
             }
         });
+        if back {
+            self.open = None;
+        }
+        if let Some(c) = clicked {
+            self.open = Some(Open::new(ui.ctx(), c));
+        }
     }
 }

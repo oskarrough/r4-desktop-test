@@ -3,6 +3,7 @@ use libmpv2::{Mpv, events::Event};
 
 mod channels;
 mod gui;
+mod tracks;
 
 fn main() {
     let Some(url) = std::env::args().nth(1) else {
