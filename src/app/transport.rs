@@ -1,10 +1,9 @@
 //! The dock, now-playing view, seeking, and volume feedback.
 use super::Action;
 use super::widgets::{
-    HIT, ICON, Icon, KNOB, TOP, arc, close, face, fit, icon_button, icon_button_sized, knob, put,
-    put_top, squircle,
+    HIT, ICON, Icon, KNOB, TOP, arc, channel_image, close, face, fit, icon_button,
+    icon_button_sized, knob, put, put_top, squircle,
 };
-use crate::channels;
 use crate::player::{Command, State};
 use crate::style::{BODY, LARGE, MARGIN, SMALL, UNIT, font, palette};
 use egui::text::LayoutJob;
@@ -225,12 +224,8 @@ pub(super) fn now_playing(
             pos2((area.center().x - side / 2.0).round(), y),
             vec2(side, side),
         );
-        let px = (side * ui.pixels_per_point()).round() as u32;
         ui.painter().rect_filled(at, 0.0, pal.surface);
-        egui::Image::new(channels::avatar_url(id, px))
-            .corner_radius(0.0)
-            .show_loading_spinner(false)
-            .paint_at(ui, at);
+        channel_image(ui, at, id, 0.0);
         y += side + gap;
     }
 

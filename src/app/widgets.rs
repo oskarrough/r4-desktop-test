@@ -29,6 +29,7 @@ fastframe_icons::icons! {
         Speaker => lucide "volume-2",
         Muted => lucide "volume-x",
         Search => lucide "search",
+        Back => lucide "chevron-left",
     }
 }
 
@@ -150,8 +151,9 @@ pub(super) fn knob(ui: &mut Ui, c: Pos2, id: &str) -> Response {
 pub(super) fn back(ui: &mut Ui, c: Pos2, actions: &mut Vec<Action>) {
     let pal = palette(ui);
     let r = knob(ui, c, "back");
-    // The chevron's ink is 6.5 wide from its tip; centre that.
-    chevron(ui, pos2(c.x - 3.25, c.y), -1.0, 5.0, pal.text);
+    Icon::Back
+        .image(pal.text, 20.0)
+        .paint_at(ui, Rect::from_center_size(c, vec2(20.0, 20.0)));
     if r.on_hover_text("Back (esc)").clicked() {
         actions.push(Action::Back);
     }
@@ -234,10 +236,21 @@ pub(super) fn face(ui: &Ui, at: Rect, image: Option<&str>, name: &str) {
         at.center().y,
     );
     if let Some(id) = image {
-        let px = (at.width() * ui.pixels_per_point()).round() as u32;
-        egui::Image::new(channels::avatar_url(id, px))
-            .corner_radius(r)
-            .show_loading_spinner(false)
+        channel_image(ui, at, id, r);
+    }
+}
+
+/// Paints loaded channel artwork, leaving its placeholder intact while loading or on failure.
+pub(super) fn channel_image(ui: &Ui, at: Rect, id: &str, corner_radius: f32) {
+    if id.trim().is_empty() {
+        return;
+    }
+    let px = (at.width() * ui.pixels_per_point()).round() as u32;
+    if let Ok(egui::load::TexturePoll::Ready { texture }) =
+        egui::Image::new(channels::avatar_url(id, px)).load_for_size(ui.ctx(), at.size())
+    {
+        egui::Image::from_texture(texture)
+            .corner_radius(corner_radius)
             .paint_at(ui, at);
     }
 }
