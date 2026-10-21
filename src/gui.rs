@@ -25,8 +25,8 @@ const KNOB: f32 = 8.0 * UNIT;
 const AVATAR: f32 = 6.0 * UNIT;
 /// How long the tracklist takes to glide to the playing track.
 const GLIDE: Duration = Duration::from_millis(240);
-/// The transport along the bottom, its progress line included.
-const BAR: f32 = 14.0 * UNIT;
+/// The mini player's height; it floats this far plus a gap above the bottom.
+const DOCK: f32 = 14.0 * UNIT;
 /// How long the volume meter stays up after a change, and how long it then takes to fade.
 const METER: Duration = Duration::from_millis(1200);
 const FADE: Duration = Duration::from_millis(300);
@@ -218,13 +218,7 @@ impl eframe::App for App {
         let actions = &mut self.actions;
 
         let flat = egui::Frame::NONE.fill(BG);
-        if !self.now {
-            egui::Panel::bottom("transport")
-                .frame(flat)
-                .exact_size(BAR)
-                .show_separator_line(false)
-                .show(ui, |ui| transport(ui, state, &mut self.scrub, actions));
-        }
+        let face_of_playing = playing.and_then(|q| avatar(&self.channels, q));
         if self.now {
             egui::CentralPanel::no_frame().frame(flat).show(ui, |ui| {
                 let image = state
@@ -244,9 +238,8 @@ impl eframe::App for App {
                     channel_list(ui, &self.channels, open, playing, false, actions);
                     chrome(ui, rect, "Radio4000", None, false, actions);
                 });
-            egui::CentralPanel::no_frame()
-                .frame(flat)
-                .show(ui, |ui| match &self.open {
+            egui::CentralPanel::no_frame().frame(flat).show(ui, |ui| {
+                match &self.open {
                     Some(o) => {
                         let image = avatar(&self.channels, &o.slug);
                         tracklist(
@@ -261,11 +254,12 @@ impl eframe::App for App {
                         )
                     }
                     None => note(ui, "Pick a channel."),
-                });
+                }
+                dock(ui, state, face_of_playing, &mut self.scrub, actions);
+            });
         } else {
-            egui::CentralPanel::no_frame()
-                .frame(flat)
-                .show(ui, |ui| match &self.open {
+            egui::CentralPanel::no_frame().frame(flat).show(ui, |ui| {
+                match &self.open {
                     Some(o) => {
                         let image = avatar(&self.channels, &o.slug);
                         tracklist(
@@ -284,7 +278,9 @@ impl eframe::App for App {
                         channel_list(ui, &self.channels, None, playing, true, actions);
                         chrome(ui, rect, "Radio4000", None, false, actions);
                     }
-                });
+                }
+                dock(ui, state, face_of_playing, &mut self.scrub, actions);
+            });
         }
 
         for a in std::mem::take(&mut self.actions) {
@@ -451,64 +447,135 @@ fn title(t: &Track) -> &str {
     t.title.as_deref().unwrap_or(&t.url)
 }
 
-/// The bar along the bottom: the progress line on its top edge, what's on at the left, play and next at the right.
-/// Clicking what's on opens the now-playing view.
-fn transport(ui: &mut Ui, s: &State, scrub: &mut Option<Scrub>, actions: &mut Vec<Action>) {
-    let rect = ui.max_rect();
-    let hit = Rect::from_min_size(rect.min, vec2(rect.width(), 2.0 * UNIT));
-    seek(ui, hit, true, LINE, s, scrub, actions);
+/// The mini player: a capsule floating over the bottom of the list, with the channel's face, what's on, play and
+/// next, and the track's progress along its top edge. Touching it opens the now-playing view. Hidden while nothing is loaded.
+fn dock(
+    ui: &mut Ui,
+    s: &State,
+    image: Option<&str>,
+    scrub: &mut Option<Scrub>,
+    actions: &mut Vec<Action>,
+) {
+    if s.queue.is_none() && s.error.is_none() {
+        return;
+    }
+    let pane = ui.max_rect();
+    let width = (pane.width() - 4.0 * UNIT).min(120.0 * UNIT);
+    let rect = Rect::from_min_size(
+        pos2(
+            (pane.center().x - width / 2.0).round(),
+            pane.bottom() - 2.0 * UNIT - DOCK,
+        ),
+        vec2(width, DOCK),
+    );
+    let p = ui.painter();
+    // The list fades out just above it and is gone by its top edge.
+    let band = Rect::from_x_y_ranges(pane.x_range(), rect.top() - 4.0 * UNIT..=rect.top());
+    p.rect_filled(
+        Rect::from_x_y_ranges(pane.x_range(), rect.top()..=pane.bottom()),
+        0.0,
+        BG,
+    );
+    let mut mesh = egui::Mesh::default();
+    mesh.colored_vertex(band.left_top(), Color32::TRANSPARENT);
+    mesh.colored_vertex(band.right_top(), Color32::TRANSPARENT);
+    mesh.colored_vertex(band.left_bottom(), BG);
+    mesh.colored_vertex(band.right_bottom(), BG);
+    mesh.add_triangle(0, 1, 2);
+    mesh.add_triangle(1, 3, 2);
+    p.add(mesh);
+    let round = DOCK / 2.0;
+    p.add(
+        egui::Shadow {
+            offset: [0, 4],
+            blur: 16,
+            spread: 0,
+            color: Color32::from_black_alpha(96),
+        }
+        .as_shape(rect, round),
+    );
+    let open = ui.interact(rect, ui.id().with("dock"), Sense::click());
+    let fill = if open.hovered() { SELECTED } else { SURFACE };
+    ui.painter().rect(
+        rect,
+        round,
+        fill,
+        egui::Stroke::new(1.0, EDGE),
+        egui::StrokeKind::Inside,
+    );
+    if open.clicked() && s.queue.is_some() {
+        actions.push(Action::ShowNow);
+    }
 
-    let cy = rect.top() + LINE + (BAR - LINE) / 2.0;
-    let loaded = s.queue.is_some();
-    let next = pos2(rect.right() - MARGIN - half(Icon::Next, ICON), cy);
+    // The top edge between the round ends is the seek line: it fills with the track and thickens to be dragged.
+    let edge = Rect::from_min_size(
+        pos2(rect.left() + round, rect.top()),
+        vec2(rect.width() - 2.0 * round, 2.0 * UNIT),
+    );
+    seek(ui, edge, true, LINE, s, scrub, actions);
+
+    // The face sits concentric with the capsule's round end; the buttons mirror it at the other.
+    let cy = rect.center().y;
+    let size = DOCK - 4.0 * UNIT;
+    face(
+        ui,
+        Rect::from_center_size(pos2(rect.left() + round, cy), vec2(size, size)),
+        image,
+        &s.channel,
+    );
+
+    let next = pos2(rect.right() - round, cy);
     let play = next - vec2(HIT, 0.0);
-    if icon_button(ui, Icon::Next, next, ICON, loaded).clicked() {
+    if icon_button(ui, Icon::Next, next, ICON, s.queue.is_some()).clicked() {
         actions.push(Action::Send(Command::Next));
     }
     play_button(ui, s, play, ICON, actions);
 
-    let x = rect.left() + MARGIN;
+    let x = rect.left() + DOCK + UNIT;
     let width = play.x - HIT / 2.0 - x;
-    let lines = if let Some(e) = &s.error {
-        vec![(
-            format!("Can't play: {e}"),
+    if let Some(e) = &s.error {
+        let g = fit(
+            ui,
+            &format!("Can't play: {e}"),
             font(SMALL, Weight::Regular),
             SECONDARY,
-        )]
-    } else if loaded {
-        let time = s.dur.map_or_else(String::new, |d| {
-            format!(" · {} / {}", clock(shown(s, scrub)), clock(d))
-        });
-        vec![
-            (s.title.clone(), font(BODY, Weight::SemiBold), TEXT),
-            (
-                format!("{}{time}", s.channel),
-                font(SMALL, Weight::Regular),
-                SECONDARY,
-            ),
-        ]
-    } else {
-        vec![(
-            "Nothing playing".into(),
-            font(BODY, Weight::Regular),
-            SECONDARY,
-        )]
-    };
-    let gap = 2.0 * UNIT;
-    let mut y = cy - gap * (lines.len() - 1) as f32;
-    let mut area = Rect::NOTHING;
-    for (text, f, color) in lines {
-        area = area.union(put(ui, fit(ui, &text, f, color, width), x, y));
-        y += 2.0 * gap;
+            width,
+        );
+        put(ui, g, x, cy);
+        return;
     }
-    let area = Rect::from_x_y_ranges(x..=x + width, rect.top() + LINE..=rect.bottom());
-    if loaded
-        && ui
-            .interact(area, ui.id().with("now"), Sense::click())
-            .clicked()
-    {
-        actions.push(Action::ShowNow);
+    let time = s.dur.map_or_else(String::new, |d| {
+        format!(" · {} / {}", clock(shown(s, scrub)), clock(d))
+    });
+    put(
+        ui,
+        fit(ui, &s.title, font(BODY, Weight::SemiBold), TEXT, width),
+        x,
+        cy - 2.0 * UNIT,
+    );
+    let sub = format!("{}{time}", s.channel);
+    put(
+        ui,
+        fit(ui, &sub, font(SMALL, Weight::Regular), SECONDARY, width),
+        x,
+        cy + 2.0 * UNIT,
+    );
+}
+
+/// A stroke clockwise from twelve o'clock, `frac` of the way round.
+fn arc(ui: &Ui, c: Pos2, radius: f32, frac: f32, stroke: egui::Stroke) {
+    let steps = (64.0 * frac).ceil() as usize;
+    if steps == 0 {
+        return;
     }
+    let points = (0..=steps)
+        .map(|k| {
+            let a = -std::f32::consts::FRAC_PI_2
+                + std::f32::consts::TAU * frac * k as f32 / steps as f32;
+            c + radius * vec2(a.cos(), a.sin())
+        })
+        .collect();
+    ui.painter().line(points, stroke);
 }
 
 /// The now-playing view, laid out like Apple's: title and channel at the margin, the seek bar with its times,
@@ -832,19 +899,13 @@ fn speaker(ui: &mut Ui, view: Rect, s: &State, volume: Option<Volume>, actions: 
         radius,
         egui::Stroke::new(2.0, HAIRLINE.gamma_multiply(fade)),
     );
-    // Clockwise from twelve o'clock, as far round as the volume.
-    let steps = (64.0 * level).ceil() as usize;
-    if steps > 0 {
-        let arc = (0..=steps)
-            .map(|k| {
-                let a = -std::f32::consts::FRAC_PI_2
-                    + std::f32::consts::TAU * level * k as f32 / steps as f32;
-                c + radius * vec2(a.cos(), a.sin())
-            })
-            .collect();
-        ui.painter()
-            .line(arc, egui::Stroke::new(2.0, TEXT.gamma_multiply(fade)));
-    }
+    arc(
+        ui,
+        c,
+        radius,
+        level,
+        egui::Stroke::new(2.0, TEXT.gamma_multiply(fade)),
+    );
     ui.ctx().request_repaint();
 }
 
@@ -933,7 +994,7 @@ fn rows(
     mut row: impl FnMut(&mut Ui, usize),
 ) {
     let view = ui.available_height();
-    let height = TOP + n as f32 * ROW + 2.0 * UNIT;
+    let height = TOP + n as f32 * ROW + DOCK + 6.0 * UNIT;
     let mut area = egui::ScrollArea::vertical().auto_shrink(false);
     let mut draw = |ui: &mut Ui, vp: Rect| {
         ui.set_height(height);
@@ -955,7 +1016,9 @@ fn rows(
         return;
     };
     if let (Some(i), Some(how)) = (target, sc.reveal.take()) {
-        let to = (TOP + i as f32 * ROW - (view - ROW) / 2.0).clamp(0.0, (height - view).max(0.0));
+        // Centre it in what's left between the top band and the mini player.
+        let middle = (TOP + view - DOCK - 4.0 * UNIT) / 2.0;
+        let to = (TOP + i as f32 * ROW + ROW / 2.0 - middle).clamp(0.0, (height - view).max(0.0));
         match how {
             Reveal::Jump => {
                 sc.glide = None;
@@ -1064,17 +1127,6 @@ fn chevron(ui: &Ui, tip: Pos2, dir: f32, h: f32, color: Color32) {
         vec![tip + vec2(arm.x, -arm.y), tip, tip + arm],
         egui::Stroke::new(1.5, color),
     );
-}
-
-/// Half the drawn width of an icon at `size`, from its glyph in the 24-unit box, stroke included.
-fn half(icon: Icon, size: f32) -> f32 {
-    let units = match icon {
-        Icon::Play => 8.5,
-        Icon::Pause => 8.0,
-        Icon::Prev | Icon::Next => 10.0,
-        Icon::Speaker | Icon::Muted => 11.0,
-    };
-    units / 24.0 * size
 }
 
 /// An icon centred on `c`, answering clicks in a `HIT` square, with a soft circle under the pointer.
