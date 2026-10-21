@@ -15,8 +15,11 @@ pub const BODY: f32 = 14.0;
 /// The now-playing title.
 pub const LARGE: f32 = 18.0;
 
-/// Radio Canada's capital height, as a share of the font size.
-pub const CAP: f32 = 0.69;
+/// Which typeface leads. Flip this to go back to Radio Canada.
+const TYPEFACE: Typeface = Typeface::Quattro;
+
+/// The leading face's capital height, as a share of the font size.
+pub const CAP: f32 = TYPEFACE.cap();
 
 pub const BG: Color32 = Color32::from_rgb(0x12, 0x12, 0x11);
 pub const HAIRLINE: Color32 = Color32::from_rgb(0x2a, 0x2a, 0x28);
@@ -28,15 +31,46 @@ pub const DISABLED: Color32 = Color32::from_rgb(0x4a, 0x4a, 0x47);
 /// Only for what is live: progress, the playing dot, the channel link.
 pub const ACCENT: Color32 = Color32::from_rgb(0xff, 0x5a, 0x1f);
 
+#[allow(dead_code)]
+enum Typeface {
+    /// iA Writer Quattro: static Regular and Bold files.
+    Quattro,
+    /// Radio Canada: one variable file.
+    RadioCanada,
+}
+
+const QUATTRO_REGULAR: &[u8] = include_bytes!("../assets/fonts/iAWriterQuattroS-Regular.ttf");
+const QUATTRO_BOLD: &[u8] = include_bytes!("../assets/fonts/iAWriterQuattroS-Bold.ttf");
 const RADIO_CANADA: &[u8] = include_bytes!("../assets/fonts/RadioCanada.ttf");
 const NOTO_EMOJI: &[u8] = include_bytes!("../assets/fonts/NotoEmoji.ttf");
+
+impl Typeface {
+    const fn cap(&self) -> f32 {
+        match self {
+            Self::Quattro => 0.70,
+            Self::RadioCanada => 0.69,
+        }
+    }
+
+    /// Lead the interface families with this face.
+    fn lead(&self, setup: fastframe_fonts::FontSetup) -> fastframe_fonts::FontSetup {
+        match self {
+            // Static files have no weight axis, so Regular and Bold are added in `install`.
+            Self::Quattro => setup,
+            Self::RadioCanada => match LocalFont::from_bytes(RADIO_CANADA.to_vec(), 0) {
+                Ok(face) => setup.local_font(face),
+                Err(_) => setup,
+            },
+        }
+    }
+}
 
 pub fn font(size: f32, weight: Weight) -> FontId {
     weight.font_id(size)
 }
 
 pub fn install(ctx: &egui::Context) {
-    // Radio Canada leads, Inter stays behind it for scripts it lacks, then the
+    // The typeface leads, Inter stays behind it for scripts it lacks, then the
     // monochrome emoji face, which colour emoji paint over where the system has them.
     let mut setup = fastframe_fonts::FontSetup::default()
         .weights(&[Weight::SemiBold])
@@ -44,10 +78,21 @@ pub fn install(ctx: &egui::Context) {
             "noto_emoji",
             Arc::new(egui::FontData::from_static(NOTO_EMOJI)),
         );
-    if let Ok(face) = LocalFont::from_bytes(RADIO_CANADA.to_vec(), 0) {
-        setup = setup.local_font(face);
-    }
+    setup = TYPEFACE.lead(setup);
     let mut fonts = setup.definitions();
+    if matches!(TYPEFACE, Typeface::Quattro) {
+        for (name, bytes, weight) in [
+            ("quattro-regular", QUATTRO_REGULAR, Weight::Regular),
+            ("quattro-bold", QUATTRO_BOLD, Weight::SemiBold),
+        ] {
+            fonts
+                .font_data
+                .insert(name.into(), Arc::new(egui::FontData::from_static(bytes)));
+            if let Some(family) = fonts.families.get_mut(&weight.family()) {
+                family.insert(0, name.into());
+            }
+        }
+    }
     let rendering = fastframe_text::detect();
     rendering.apply_to(&mut fonts);
     ctx.set_fonts(fonts);
