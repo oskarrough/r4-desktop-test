@@ -27,10 +27,11 @@ jobs:
         include:
           - os: ubuntu-latest
             asset: radio4000-linux-x86_64.tar.gz
-          - os: macos-latest
-            asset: radio4000-macos-arm64.tar.gz
-          - os: windows-latest
-            asset: radio4000-windows-x86_64.zip
+          # macOS and Windows are off while we move fast; their last builds stay on the release.
+          # - os: macos-latest
+          #   asset: radio4000-macos-arm64.tar.gz
+          # - os: windows-latest
+          #   asset: radio4000-windows-x86_64.zip
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
