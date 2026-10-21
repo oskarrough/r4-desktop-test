@@ -149,11 +149,11 @@ enum Action {
     ShowNow,
     /// Open the search panel.
     Search(SearchTarget),
-    /// Play this track of the open channel, as far as it's narrowed to a filter.
+    /// Play this track of the open channel, within its filter.
     Play(usize),
-    /// Switch this tag of the open channel's filter on or off.
+    /// Toggle this tag in the open channel's filter.
     Tag(String),
-    /// Show all of the open channel's tracks again.
+    /// Drop the open channel's filter.
     ClearFilter,
     /// Play an original queue index from filtered results, keeping the query and list position.
     PlayTrack(ChannelRef, usize),
@@ -753,7 +753,7 @@ impl App {
                     self.find_playing();
                 }
             }
-            // The tags stay up, so a filter can be built a switch at a time; the cursor follows the tag it switched.
+            // The tags stay open; the cursor follows the toggled tag.
             Action::Tag(tag) => {
                 self.nav.filter = toggle_tag(self.nav.filter.as_deref(), &tag);
                 if let Some(search) = &mut self.nav.search
@@ -790,14 +790,14 @@ impl App {
             Action::Search(target) => {
                 self.scrolling.stop();
                 let mut search = Search::new(target);
-                // Searching a narrowed channel starts from what it's narrowed to, to add to or take away.
+                // Start from the current filter.
                 if let (SearchTarget::Tracks(_), Some(filter)) = (&search.target, &self.nav.filter)
                 {
                     search.query = format!("{filter} ");
                 }
                 self.nav.search = Some(search);
             }
-            // What's searched for is what plays, and what the channel shows once the search closes.
+            // The query becomes the filter: what you see is what plays.
             Action::PlayTrack(open, index) => {
                 let filter = self
                     .nav
@@ -808,7 +808,6 @@ impl App {
                 if filter != self.nav.filter
                     && let Some(Ok(list)) = self.library.tracks(&open.slug)
                 {
-                    // The tracklist under the search follows, ready on the track once the search closes.
                     let shown = shown_tracks(list, filter.as_deref());
                     self.track_scroll.cursor = shown.iter().position(|&i| i == index).unwrap_or(0);
                     self.track_scroll.reveal = Some(Reveal::Jump);
@@ -892,7 +891,7 @@ impl App {
         (listed && self.player.state.queue.as_deref() != Some(&c.slug)).then_some(c)
     }
 
-    /// A search or filter list over the open channel, which leaves the tracklist where it is.
+    /// A search or tags panel over the open channel.
     fn searching_in_channel(&self) -> bool {
         self.nav
             .search
@@ -900,8 +899,7 @@ impl App {
             .is_some_and(|s| matches!(&s.target, SearchTarget::Tracks(_) | SearchTarget::Tags(_)))
     }
 
-    /// Puts the tracklist's cursor on the playing track if the open channel shows it, else on the first,
-    /// and brings it into view.
+    /// Moves the tracklist's cursor to the playing track, or the first.
     fn find_playing(&mut self) {
         let Some(o) = &self.nav.open_channel else {
             return;
@@ -916,7 +914,6 @@ impl App {
                         .iter()
                         .position(|&j| j == i)
                 }),
-            // Still loading: the tracklist finds the playing track once it's here.
             _ => s.index.filter(|_| s.queue.as_deref() == Some(&o.slug)),
         };
         self.track_scroll.reset_glide();
@@ -927,7 +924,7 @@ impl App {
         });
     }
 
-    /// Plays a channel, or its filter, from a random track, another one than is playing if it's this one.
+    /// Plays a random track of the channel, within `filter`, not the one playing.
     fn shuffle(&mut self, slug: &str, name: &str, filter: Option<String>) {
         let Some(Ok(list)) = self.library.tracks(slug) else {
             return;

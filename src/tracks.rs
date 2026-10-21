@@ -12,7 +12,7 @@ pub struct Track {
     pub description: Option<String>,
     pub url: String,
     pub provider: Option<String>,
-    /// The #hashtags in its description, without the #, lowercase.
+    /// Its #hashtags, lowercase, without the #.
     #[serde(default, deserialize_with = "lowercase")]
     pub tags: Vec<String>,
 }
@@ -23,7 +23,7 @@ impl Track {
     }
 }
 
-/// The tags on these tracks with how many carry each, most used first, then alphabetically.
+/// Tag counts, most used first.
 pub fn tags<'a>(list: impl IntoIterator<Item = &'a Track>) -> Vec<(&'a str, usize)> {
     let mut counts = std::collections::HashMap::new();
     for tag in list.into_iter().flat_map(|t| &t.tags) {

@@ -18,7 +18,7 @@ use fastframe_fonts::Weight;
 pub(super) enum SearchTarget {
     Channels,
     Tracks(ChannelRef),
-    /// The tags among what the channel shows, each a switch that narrows it further or lets go.
+    /// The channel's tags, as toggles on its filter.
     Tags(ChannelRef),
 }
 
@@ -45,7 +45,7 @@ pub(super) fn title(t: &Track) -> &str {
     t.title.as_deref().unwrap_or(&t.url)
 }
 
-/// What the channel wrote about a track, on one line, if anything.
+/// The track's description on one line.
 pub(super) fn description(t: &Track) -> Option<String> {
     let d = t
         .description
@@ -55,16 +55,19 @@ pub(super) fn description(t: &Track) -> Option<String> {
     (!d.is_empty()).then(|| d.join(" "))
 }
 
-/// The tracks a channel shows: all of them, or those matching `filter`, as indices into its list.
+/// Indices of the tracks matching `filter`, in channel order.
 pub(super) fn shown_tracks(list: &[Track], filter: Option<&str>) -> Vec<usize> {
     match filter {
-        Some(filter) => matching_tracks(filter, list),
+        Some(filter) => {
+            let mut shown = matching_tracks(filter, list);
+            shown.sort_unstable();
+            shown
+        }
         None => (0..list.len()).collect(),
     }
 }
 
-/// The tags among what the channel shows holding every word typed, a leading # or not: those it's narrowed to
-/// first, marked on, then the rest, most used first.
+/// Tags of the shown tracks matching `query`: active ones first, then by count.
 pub(super) fn matching_tags<'a>(
     query: &str,
     list: &'a [Track],
@@ -82,12 +85,11 @@ pub(super) fn matching_tags<'a>(
         .filter(|(tag, _)| words.iter().all(|w| tag.contains(w)))
         .map(|(tag, n)| (tag, n, taken.iter().any(|t| t == tag)))
         .collect();
-    // Stable, so each group keeps its order.
     tags.sort_by_key(|&(_, _, on)| !on);
     tags
 }
 
-/// The filter with `tag` switched: dropped if it's in, added at the end if not. Nothing left is no filter.
+/// Adds or removes `#tag` in the filter.
 pub(super) fn toggle_tag(filter: Option<&str>, tag: &str) -> Option<String> {
     let mut words: Vec<&str> = filter.unwrap_or("").split_whitespace().collect();
     let had = words.len();
@@ -102,7 +104,7 @@ pub(super) fn toggle_tag(filter: Option<&str>, tag: &str) -> Option<String> {
     (!filter.is_empty()).then_some(filter)
 }
 
-/// The tags asked for in a query: its words that start with #.
+/// The query's #words, without the #.
 fn tag_words(query: &str) -> Vec<String> {
     query
         .split_whitespace()
@@ -364,29 +366,51 @@ pub(super) fn matching(query: &str, list: &[Channel]) -> Vec<usize> {
     hits.into_iter().map(|(_, i)| i).collect()
 }
 
-/// Track matches keep their original queue indices and ordering, including URL fallback titles.
-/// Words are looked for in the description too; a word starting with # asks for that tag exactly.
+/// Tracks matching every word, best first. `#word` is an exact tag; other words fuzzy-match the title
+/// or appear in the description.
 pub(super) fn matching_tracks(query: &str, tracks: &[Track]) -> Vec<usize> {
+    use nucleo_matcher::pattern::{Atom, AtomKind, CaseMatching, Normalization};
+    use nucleo_matcher::{Config, Matcher, Utf32Str};
     let query = query.to_lowercase();
     let tags = tag_words(&query);
-    let words: Vec<_> = query
+    let words: Vec<(&str, Atom)> = query
         .split_whitespace()
         .filter(|w| !w.starts_with('#'))
+        .map(|w| {
+            let atom = Atom::new(
+                w,
+                CaseMatching::Ignore,
+                Normalization::Smart,
+                AtomKind::Fuzzy,
+                false,
+            );
+            (w, atom)
+        })
         .collect();
-    tracks
+    let mut matcher = Matcher::new(Config::DEFAULT);
+    let mut buf = Vec::new();
+    let mut hits: Vec<(u32, usize)> = tracks
         .iter()
         .enumerate()
+        .filter(|(_, track)| tags.iter().all(|t| track.tagged(t)))
         .filter_map(|(i, track)| {
-            let name = format!(
-                "{} {}",
-                title(track),
-                track.description.as_deref().unwrap_or("")
-            )
-            .to_lowercase();
-            (tags.iter().all(|t| track.tagged(t)) && words.iter().all(|word| name.contains(word)))
-                .then_some(i)
+            let name = title(track);
+            let about = track.description.as_deref().unwrap_or("").to_lowercase();
+            let mut score = 0;
+            for (word, atom) in &words {
+                // Allow typos, not letters scattered across the title.
+                let close = 12 * word.chars().count() as u16;
+                match atom.score(Utf32Str::new(name, &mut buf), &mut matcher) {
+                    Some(s) if s >= close => score += u32::from(s),
+                    _ if about.contains(word) => {}
+                    _ => return None,
+                }
+            }
+            Some((score, i))
         })
-        .collect()
+        .collect();
+    hits.sort_by_key(|&(score, _)| std::cmp::Reverse(score));
+    hits.into_iter().map(|(_, i)| i).collect()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -689,12 +713,10 @@ mod tests {
             track("Augustus Pablo – East", "#dub house party", &["dub"]),
             track("Moodymann – Shades", "#house", &["house"]),
         ];
-        // A # word is that tag exactly, other words look in titles and descriptions.
         assert_eq!(super::matching_tracks("#dub", &list), [0, 2]);
         assert_eq!(super::matching_tracks("#DUB party", &list), [2]);
         assert_eq!(super::matching_tracks("#dub #roots", &list), [0]);
         assert_eq!(super::shown_tracks(&list, None), [0, 1, 2, 3]);
-        // Tags offered on a narrowed channel count only what it shows, and leave out what's already asked for.
         assert_eq!(
             super::matching_tags("", &list, Some("#dub")),
             [("dub", 2, true), ("roots", 1, false)]
@@ -713,5 +735,21 @@ mod tests {
             super::matching_tags("#du", &list, None),
             [("dub", 2, false), ("dubstep", 1, false)]
         );
+    }
+
+    #[test]
+    fn track_search_forgives_typos_and_puts_the_best_first() {
+        let track = |title: &str| crate::tracks::Track {
+            title: Some(title.into()),
+            ..Default::default()
+        };
+        let list = [
+            track("Carl Craig – Landcruising"),
+            track("Clark – Herr Barr"),
+            track("Cocteau Twins – Lorelei, remastered with care"),
+        ];
+        assert_eq!(super::matching_tracks("clrk", &list), [1]);
+        assert_eq!(super::matching_tracks("cocteu", &list), [2]);
+        assert_eq!(super::matching_tracks("carl", &list)[0], 0);
     }
 }

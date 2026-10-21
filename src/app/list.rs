@@ -40,7 +40,7 @@ struct Glide {
     at: Instant,
 }
 
-/// What ends a row at the right, when it isn't playing: a chevron for rows that open something, a tick for one that's on.
+/// The mark at a row's right end.
 #[derive(Clone, Copy, PartialEq)]
 pub(super) enum Trail {
     None,
@@ -48,8 +48,7 @@ pub(super) enum Trail {
     On,
 }
 
-/// One row of a list: the name at the margin, then a playing dot or what `trail` asks for.
-/// A `note` follows the name on the same line, quieter, and is the first to be cut short.
+/// One row of a list: the name, a quieter `note` after it, then a playing dot or the `trail`.
 /// `avatar` gives the row an avatar slot at the margin: the channel's image, or its initial when it has none.
 /// The avatar is a play button of its own, showing so while the row is pointed at or focused; its response comes second.
 pub(super) fn row(
@@ -66,7 +65,7 @@ pub(super) fn row(
     if !ui.is_rect_visible(rect) {
         return (r, None);
     }
-    // The playing track lights up white, its title dark against it.
+    // The playing track is white.
     let lit = playing && avatar.is_none();
     let fill = if lit {
         Color32::WHITE

@@ -61,8 +61,7 @@ pub struct Track {
 }
 
 pub enum Command {
-    /// Replace the playlist with the `pool` of `tracks` in shuffled order unless `queue` and `filter` are already loaded,
-    /// then start at `index`. A filtered channel pools only its matches; indices stay the channel's.
+    /// Shuffle the `pool` of `tracks` into the playlist unless `queue` and `filter` are loaded, then start at `index`.
     Play {
         queue: String,
         filter: Option<String>,
@@ -88,7 +87,7 @@ pub enum Command {
 pub struct State {
     /// Slug of the loaded channel.
     pub queue: Option<String>,
-    /// What the loaded channel is narrowed to, as typed: `#dub house`.
+    /// The loaded channel's filter, as typed.
     pub filter: Option<String>,
     pub channel: String,
     /// Position of the current track in the channel's tracklist.
@@ -109,7 +108,7 @@ impl State {
         self.index.is_some() && self.dur.is_none()
     }
 
-    /// The channel's name, and its filter when only its matches are playing.
+    /// The channel's name and filter.
     pub fn station(&self) -> String {
         match &self.filter {
             Some(filter) => format!("{} · {filter}", self.channel),
@@ -444,7 +443,7 @@ mod tests {
         assert_eq!(p.state.index, Some(4));
         assert_eq!(p.state.title, "t4");
 
-        // A filtered channel plays only its pool, still counting in the channel's tracks.
+        // A filter plays only its pool, with channel indices.
         p.send(Command::Play {
             queue: "c".into(),
             filter: Some("#dub".into()),

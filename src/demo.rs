@@ -48,7 +48,6 @@ pub fn from_env() -> Option<Demo> {
         track_count: Some(2648),
         ..channel("oskar", "Radio Oskar")
     };
-    // Some with words from the channel, and the tags in them.
     let track = |title: &str| {
         let (title, words) = title.split_once(" | ").unwrap_or((title, ""));
         Track {

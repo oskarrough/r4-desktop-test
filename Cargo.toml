@@ -28,6 +28,7 @@ fastframe-instance = { git = "https://github.com/crmne/fastframe", tag = "v0.14.
 fastframe-file = { git = "https://github.com/crmne/fastframe", tag = "v0.14.0" }
 fastframe-now-playing = { git = "https://github.com/crmne/fastframe", tag = "v0.14.0" }
 sha2 = "0.10"
+nucleo-matcher = "0.3"
 
 
 [target.'cfg(target_os = "linux")'.dependencies]

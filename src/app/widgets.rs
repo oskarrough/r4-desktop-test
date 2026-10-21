@@ -155,7 +155,6 @@ pub(super) fn chrome(
         if search.on_hover_text("Search tracks (/)").clicked() {
             actions.push(Action::Search(SearchTarget::Tracks(open.clone())));
         }
-        // Tags sit beside search, for channels that use them.
         let mut inner = c.x;
         if tagged {
             let t = pos2(c.x - KNOB - 2.0 * UNIT, cy);
@@ -186,7 +185,7 @@ pub(super) fn chrome(
             )
         })
         .flatten();
-        // Narrowed, the pill is the filter: it opens the tags to change it, and its × lets go of it.
+        // Filtered, the pill opens the tags and its × clears.
         if let Some((r, clear)) = r {
             if filtered {
                 if r.on_hover_text("Change tags (t)").clicked() {
@@ -276,7 +275,7 @@ pub(super) fn close(ui: &mut Ui, c: Pos2, actions: &mut Vec<Action>) {
 }
 
 /// The title in a pill centred on `c`, led by the avatar when there is one. Pressable, like the knobs.
-/// With `clear`, an × ends it, answering on its own as the second response.
+/// `clear` adds an ×, returned as the second response.
 fn pill(
     ui: &mut Ui,
     c: Pos2,

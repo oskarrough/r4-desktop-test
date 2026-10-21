@@ -24,7 +24,7 @@ pub(super) struct Nav {
     pub(super) show_now_playing: bool,
     pub(super) now_playing_transition: Option<Slide>,
     pub(super) search: Option<Search>,
-    /// The open channel narrowed to the tracks matching this, as typed in search: `#dub house`.
+    /// Narrows the open channel, as typed in search: `#dub house`.
     pub(super) filter: Option<String>,
 }
 
