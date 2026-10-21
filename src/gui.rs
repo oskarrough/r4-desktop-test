@@ -106,9 +106,7 @@ pub fn run() -> eframe::Result {
                 player: Player::spawn(&[], move || ctx.request_repaint()),
                 media: {
                     let ctx = cc.egui_ctx.clone();
-                    NowPlaying::start(media::App::new("radio4000", "Radio4000"), move || {
-                        ctx.request_repaint()
-                    })
+                    NowPlaying::start(media::app(), move || ctx.request_repaint())
                 },
                 seek: None,
                 scrub: None,

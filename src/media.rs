@@ -5,6 +5,18 @@ use std::time::{Duration, Instant};
 
 pub use fastframe_now_playing::{App, Command, NowPlaying};
 
+/// `radio4000` on the bus, or `radio4000.instance_<name>` for a [`crate::instance`], as `playerctl -p` names it.
+pub fn app() -> App {
+    let bus_name = match crate::instance() {
+        Some(name) => format!("radio4000.instance_{name}"),
+        None => "radio4000".to_owned(),
+    };
+    App {
+        desktop_entry: "radio4000".to_owned(),
+        ..App::new(&bus_name, "Radio4000")
+    }
+}
+
 /// The id the widget knows the playing track by: channel and position, so a seek meant for an earlier track can be told apart.
 pub fn track_id(s: &State) -> Option<String> {
     Some(format!("{}/{}", s.queue.as_deref()?, s.index?))

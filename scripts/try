@@ -1,0 +1,110 @@
+#!/usr/bin/env bash
+# Run this checkout's build as its own copy on the Hyprland desktop, beside Oskar's player and other checkouts' runs.
+#
+#   scripts/try start [args]    build, launch, wait for the window; env such as RADIO4000_DEMO=list passes through
+#   scripts/try key <key> [mods]  send a key to this copy's window only (Down, Return, space, n, ...)
+#   scripts/try float [w h]     float it, at 280x420 unless told otherwise
+#   scripts/try shot <file.png> raise it and screenshot just its window
+#   scripts/try close           close it as a user would (saves window.json), kill after 5s
+#   scripts/try reset           forget its config, cache and logs
+#
+# Every window command targets this copy's pid, never the Radio4000 class, which other runs share.
+# Config, cache and logs live in target/try/xdg, so reopen tests survive between starts until a reset.
+set -euo pipefail
+
+root=$(git rev-parse --show-toplevel)
+dir="$root/target/try"
+# bb names every worktree folder `desktop`, so the path's hash tells them apart.
+name=${RADIO4000_INSTANCE:-$(basename "$root")_$(printf %s "$root" | sha256sum | cut -c1-6)}
+name=${name//[^A-Za-z0-9]/_}
+mkdir -p "$dir/xdg"
+
+pid() {
+	local p
+	p=$(cat "$dir/pid" 2>/dev/null) && kill -0 "$p" 2>/dev/null && echo "$p" && return
+	echo "try: not running; scripts/try start first" >&2
+	exit 1
+}
+
+window() { hyprctl clients -j | jq -e -c ".[] | select(.pid == $1)"; }
+
+dispatch() {
+	local out
+	out=$(hyprctl dispatch "$1")
+	[[ $out == ok ]] || { echo "try: hyprctl: $out" >&2; exit 1; }
+}
+
+# Raising and capturing must not interleave with another run's, or one shoots the other's window.
+desktop_lock() { exec 9>"${XDG_RUNTIME_DIR:-/tmp}/radio4000-try.lock"; flock -w 30 9; }
+
+case ${1:-} in
+start)
+	shift
+	if p=$(cat "$dir/pid" 2>/dev/null) && kill -0 "$p" 2>/dev/null; then
+		echo "try: already running as pid $p; scripts/try close first" >&2
+		exit 1
+	fi
+	cargo build --quiet --manifest-path "$root/Cargo.toml"
+	rm -f "$dir/pid"
+	bin="${CARGO_TARGET_DIR:-$root/target}/debug/radio4000"
+	XDG_CONFIG_HOME="$dir/xdg/config" XDG_CACHE_HOME="$dir/xdg/cache" XDG_STATE_HOME="$dir/xdg/state" \
+		RADIO4000_INSTANCE="$name" setsid bash -c 'echo $$ >"$0"; exec "$@"' "$dir/pid" "$bin" "$@" \
+		>"$dir/out.log" 2>&1 </dev/null &
+	# setsid may fork, so the shell it starts writes its pid, then becomes the app.
+	for _ in $(seq 50); do [[ -s $dir/pid ]] && break; sleep 0.1; done
+	p=$(cat "$dir/pid")
+	if [[ ${1:-} == http* ]]; then
+		echo "pid $p, audio only; output in $dir/out.log"
+		exit 0
+	fi
+	for _ in $(seq 100); do
+		w=$(window "$p" 2>/dev/null) && break
+		kill -0 "$p" 2>/dev/null || { echo "try: exited before its window opened:" >&2; cat "$dir/out.log" >&2; exit 1; }
+		# A sandboxed shell has no GPU and a read-only runtime folder: the window never comes.
+		if grep -q 'Read-only file system\|failed to create dri2 screen' "$dir/out.log"; then
+			kill "$p"
+			echo "try: no display here; run scripts/try outside the sandbox" >&2
+			exit 1
+		fi
+		sleep 0.2
+	done
+	[[ -n ${w:-} ]] || { kill "$p" 2>/dev/null; echo "try: no window after 20s" >&2; cat "$dir/out.log" >&2; exit 1; }
+	echo "pid $p, window $(jq -r '"\(.size[0])x\(.size[1]) floating=\(.floating)"' <<<"$w")"
+	echo "mpris: playerctl -p radio4000.instance_$name"
+	echo "log: $dir/xdg/config/radio4000/desktop/radio4000.log, stdout in $dir/out.log"
+	;;
+key)
+	p=$(pid)
+	dispatch "hl.dsp.send_shortcut({ mods = \"${3:-}\", key = \"$2\", window = \"pid:$p\" })"
+	;;
+float)
+	p=$(pid)
+	dispatch "hl.dsp.window.float({ action = \"enable\", window = \"pid:$p\" })"
+	dispatch "hl.dsp.window.resize({ x = ${2:-280}, y = ${3:-420}, window = \"pid:$p\" })"
+	;;
+shot)
+	p=$(pid)
+	out=$(realpath -m "${2:?usage: scripts/try shot <file.png>}")
+	desktop_lock
+	dispatch "hl.dsp.window.alter_zorder({ mode = \"top\", window = \"pid:$p\" })" # bring_to_top ignores window
+	sleep 0.3 # a frame or two after a raise or resize, or the capture is blank
+	geometry=$(window "$p" | jq -r '"\(.at[0]),\(.at[1]) \(.size[0])x\(.size[1])"')
+	grim -g "$geometry" "$out"
+	echo "$out"
+	;;
+close)
+	p=$(pid)
+	dispatch "hl.dsp.window.close({ window = \"pid:$p\" })"
+	for _ in $(seq 50); do kill -0 "$p" 2>/dev/null || exit 0; sleep 0.1; done
+	kill "$p"
+	echo "try: didn't close in 5s; killed" >&2
+	;;
+reset)
+	[[ -f $dir/pid ]] && kill -0 "$(cat "$dir/pid")" 2>/dev/null && { echo "try: close it first" >&2; exit 1; }
+	rm -rf "$dir/xdg"
+	;;
+*)
+	sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'
+	exit 2
+	;;
+esac
