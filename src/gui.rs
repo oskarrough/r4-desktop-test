@@ -110,6 +110,7 @@ pub fn run() -> eframe::Result {
                 info: false,
                 left: None,
                 side: None,
+                pending: None,
                 now: false,
                 up: None,
                 search: None,
@@ -176,6 +177,8 @@ struct App {
     left: Option<Open>,
     /// A channel's tracks sliding sideways over the channels, in a small window.
     side: Option<Slide>,
+    /// A channel asked to play from the list, waiting on its tracks.
+    pending: Option<Open>,
     /// The now-playing view covers everything else.
     now: bool,
     /// Now playing sliding up over everything, or back down.
@@ -315,6 +318,8 @@ impl Volume {
 /// What the views asked for this frame, done once they are drawn.
 enum Action {
     Open(String, String),
+    /// Play this channel from a random track, without opening it.
+    PlayChannel(String, String),
     Back,
     /// Show or hide the open channel's details.
     Info,
@@ -545,6 +550,12 @@ impl App {
                 t.list = Some(result);
             }
         }
+        if let Some(p) = self.pending.take() {
+            match self.tracks.get(&p.slug).and_then(|t| t.list.as_ref()) {
+                None => self.pending = Some(p),
+                Some(_) => self.shuffle(&p.slug, &p.name),
+            }
+        }
         let before = (self.player.state.queue.clone(), self.player.state.index);
         if !self.demo {
             self.player.update();
@@ -572,6 +583,7 @@ impl App {
         let overview = !self.now
             && self.search.is_none()
             && (self.open.is_none() || ctx.content_rect().width() >= WIDE);
+        let tabbed = ctx.memory(|m| m.focused()).is_some();
         ctx.input_mut(|i| {
             let mut key = |k, a| {
                 if i.consume_key(Modifiers::NONE, k) {
@@ -601,7 +613,10 @@ impl App {
                 key(Key::ArrowDown, Action::Cursor(1));
                 key(Key::PageUp, Action::Cursor(-8));
                 key(Key::PageDown, Action::Cursor(8));
-                key(Key::Enter, Action::Choose);
+                // A button reached with Tab takes its own Return; the search field passes it on.
+                if typing || !tabbed {
+                    key(Key::Enter, Action::Choose);
+                }
                 if !typing {
                     key(Key::I, Action::Info);
                 }
@@ -665,6 +680,13 @@ impl App {
     fn act(&mut self, ctx: &egui::Context, a: Action) {
         match a {
             Action::Cursor(by) => {
+                // The arrows take over from Tab, so Return chooses the cursor's row again.
+                // The search field keeps the keyboard.
+                if self.search.is_none()
+                    && let Some(id) = ctx.memory(|m| m.focused())
+                {
+                    ctx.memory_mut(|m| m.surrender_focus(id));
+                }
                 // The first press only shows where the cursor is; search always shows it.
                 let by = if self.keyed || self.search.is_some() {
                     by
@@ -712,7 +734,7 @@ impl App {
             }
             Action::Choose if !self.now => match &self.open {
                 Some(o) if self.info => open_page(ctx, &o.slug),
-                Some(_) => self.play(self.scroll.cursor),
+                Some(_) => self.act(ctx, Action::Play(self.scroll.cursor)),
                 None => {
                     if let Some(Ok(list)) = &self.channels
                         && let Some(c) = list.get(self.channel_scroll.cursor)
@@ -762,6 +784,19 @@ impl App {
                     self.side = Some(Slide::start(false, self.side));
                 }
             }
+            Action::PlayChannel(slug, name) => {
+                if self.demo {
+                    // The demo has one tracklist; borrow it so the playing dot moves to this channel.
+                    let s = &mut self.player.state;
+                    s.index = Some(player::pick(6, s.index, player::random()));
+                    (s.queue, s.channel) = (Some(slug), name);
+                    return;
+                }
+                self.tracks
+                    .entry(slug.clone())
+                    .or_insert_with(|| Tracks::fetch(ctx, &slug));
+                self.pending = Some(Open { slug, name });
+            }
             Action::Info => self.info = self.open.is_some() && !self.info,
             Action::ShowNow => self.show_now(self.player.state.queue.is_some()),
             Action::Search => {
@@ -770,10 +805,23 @@ impl App {
             }
             Action::Play(index) => {
                 self.scroll.cursor = index;
-                self.play(index);
+                if let Some(o) = &self.open {
+                    let (slug, name) = (o.slug.clone(), o.name.clone());
+                    self.play(&slug, &name, index);
+                }
             }
-            // Space with nothing loaded starts the open channel from the top.
-            Action::Toggle if self.player.state.queue.is_none() => self.play(0),
+            // Like the iPod's play button on a highlighted playlist: Space plays the channel under the cursor.
+            Action::Toggle if let Some(c) = self.cued() => {
+                let a = Action::PlayChannel(c.slug.clone(), c.name.clone());
+                self.act(ctx, a);
+            }
+            // Space with nothing loaded starts the open channel at a random track.
+            Action::Toggle if self.player.state.queue.is_none() => {
+                if let Some(o) = &self.open {
+                    let (slug, name) = (o.slug.clone(), o.name.clone());
+                    self.shuffle(&slug, &name);
+                }
+            }
             Action::Toggle => self.player.send(Command::Toggle),
             Action::Volume(by) => {
                 let from = self.volume.map_or(self.player.state.volume, |v| v.to);
@@ -801,7 +849,8 @@ impl App {
                     _ => return,
                 };
                 let i = self.player.state.index.unwrap_or(0) as isize + by;
-                self.play(i.max(0) as usize);
+                self.player.state.index = Some(i.max(0) as usize);
+                self.scroll.reveal = Some(Reveal::Glide);
             }
             Action::Send(c) => {
                 if let Some(seek) = media::Seek::new(&self.player.state, &c) {
@@ -819,23 +868,45 @@ impl App {
         }
     }
 
-    fn play(&mut self, index: usize) {
-        let Some(open) = &self.open else { return };
+    /// The channel under the list's cursor, while the arrows are in use and it isn't the one playing.
+    fn cued(&self) -> Option<&Channel> {
+        let Some(Ok(list)) = &self.channels else {
+            return None;
+        };
+        let c = list.get(self.channel_scroll.cursor)?;
+        let listed = self.keyed && self.open.is_none() && self.search.is_none() && !self.now;
+        (listed && self.player.state.queue.as_deref() != Some(&c.slug)).then_some(c)
+    }
+
+    /// Plays a channel from a random track, another one than is playing if it's this channel.
+    fn shuffle(&mut self, slug: &str, name: &str) {
+        let Some(Ok(list)) = self.tracks.get(slug).and_then(|t| t.list.as_ref()) else {
+            return;
+        };
+        let s = &self.player.state;
+        let now = s.index.filter(|_| s.queue.as_deref() == Some(slug));
+        let index = player::pick(list.len(), now, player::random());
+        self.play(slug, name, index);
+    }
+
+    fn play(&mut self, slug: &str, name: &str, index: usize) {
+        // Whatever was asked for last wins over a channel still waiting on its tracks.
+        self.pending = None;
         // The demo's player stands still, so follow the tap by hand.
         if self.demo {
             self.player.state.index = Some(index);
             self.scroll.reveal = Some(Reveal::Glide);
             return;
         }
-        let Some(Ok(list)) = self.tracks.get(&open.slug).and_then(|t| t.list.as_ref()) else {
+        let Some(Ok(list)) = self.tracks.get(slug).and_then(|t| t.list.as_ref()) else {
             return;
         };
         if index >= list.len() {
             return;
         }
         self.player.send(Command::Play {
-            queue: open.slug.clone(),
-            channel: open.name.clone(),
+            queue: slug.to_string(),
+            channel: name.to_string(),
             tracks: list
                 .iter()
                 .map(|t| player::Track {
@@ -1214,17 +1285,19 @@ fn channel_row(
     opens: bool,
     actions: &mut Vec<Action>,
 ) {
-    if row(
+    let (r, play) = row(
         ui,
         &c.name,
         Some(c.image.as_deref()),
         selected,
         playing == Some(&c.slug),
         opens,
-    )
-    .clicked()
-    {
+    );
+    if r.clicked() {
         actions.push(Action::Open(c.slug.clone(), c.name.clone()));
+    }
+    if play.is_some_and(|p| p.on_hover_text("Play, shuffled").clicked()) {
+        actions.push(Action::PlayChannel(c.slug.clone(), c.name.clone()));
     }
 }
 
@@ -1384,6 +1457,7 @@ fn tracklist(
                     current == Some(i),
                     false,
                 )
+                .0
                 .clicked()
                 {
                     actions.push(Action::Play(i));
@@ -1730,6 +1804,7 @@ fn speaker(ui: &mut Ui, view: Rect, s: &State, volume: Option<Volume>, actions: 
 
 /// One row of a list: the name at the margin, then a playing dot or, for rows that open something, a chevron.
 /// `avatar` gives the row an avatar slot at the margin: the channel's image, or its initial when it has none.
+/// The avatar is a play button of its own, showing so while the row is pointed at or focused; its response comes second.
 fn row(
     ui: &mut Ui,
     label: &str,
@@ -1737,15 +1812,15 @@ fn row(
     selected: bool,
     playing: bool,
     opens: bool,
-) -> Response {
+) -> (Response, Option<Response>) {
     let pal = palette(ui);
     let (rect, r) = ui.allocate_exact_size(vec2(ui.available_width(), ROW), Sense::click());
     if !ui.is_rect_visible(rect) {
-        return r;
+        return (r, None);
     }
     let fill = if selected {
         pal.selected
-    } else if r.hovered() || r.has_focus() {
+    } else if r.contains_pointer() || r.has_focus() {
         pal.hover
     } else {
         Color32::TRANSPARENT
@@ -1763,9 +1838,24 @@ fn row(
         right -= 4.0 + 2.0 * UNIT;
     }
     let mut x = rect.left() + MARGIN;
+    let mut play = None;
     if let Some(image) = avatar {
         let at = Rect::from_min_size(pos2(x, cy - AVATAR / 2.0), vec2(AVATAR, AVATAR));
         face(ui, at, image, label);
+        // The hit is the row's full height, so the button is as easy to reach as the row.
+        let hit = Rect::from_center_size(at.center(), vec2(ROW, ROW));
+        let p = ui.interact(hit, r.id.with("play"), Sense::click());
+        if ui.rect_contains_pointer(rect) || r.has_focus() || p.has_focus() {
+            let lit = p.hovered() || p.has_focus();
+            let scrim = if lit { 0.8 } else { 0.6 };
+            ui.painter()
+                .circle_filled(at.center(), AVATAR / 2.0, pal.bg.gamma_multiply(scrim));
+            let size = AVATAR / 2.0;
+            Icon::Play
+                .image(if lit { pal.text } else { pal.secondary }, size)
+                .paint_at(ui, Rect::from_center_size(at.center(), vec2(size, size)));
+        }
+        play = Some(p);
         x += AVATAR + 2.0 * UNIT;
     }
     put(
@@ -1774,7 +1864,7 @@ fn row(
         x,
         cy,
     );
-    r
+    (r, play)
 }
 
 /// A channel's avatar in a circle, or its first letter while there's no picture.
@@ -2102,8 +2192,7 @@ fn clock(secs: f64) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{SLIDE, Slide};
-    use std::time::Instant;
+    use super::*;
 
     #[test]
     fn turning_back_mid_slide_picks_up_where_it_was() {
@@ -2160,5 +2249,84 @@ mod tests {
         assert_eq!(found("liga"), ["sempre"]);
         assert_eq!(found("bel"), ["belleville"]);
         assert!(found("jazz").is_empty());
+    }
+
+    #[test]
+    fn later_track_selection_cancels_earlier_overview_play() {
+        let ctx = egui::Context::default();
+        let (_, rx) = mpsc::channel();
+        let (ready, loading) = mpsc::channel();
+        let mut app = App {
+            rx,
+            channels: None,
+            tracks: HashMap::new(),
+            open: Some(Open {
+                slug: "b".into(),
+                name: "B".into(),
+            }),
+            info: false,
+            left: None,
+            side: None,
+            pending: None,
+            now: false,
+            up: None,
+            search: None,
+            player: Player::spawn(&[("ao", "null")], || {}),
+            media: NowPlaying::start(
+                media::App::new(&format!("radio4000.test_{}", std::process::id()), "test"),
+                || {},
+            ),
+            seek: None,
+            scrub: None,
+            volume: None,
+            scroll: Scroll::default(),
+            channel_scroll: Scroll::default(),
+            scrolling: fastframe_scroll::Scrolling::default(),
+            keyed: false,
+            actions: Vec::new(),
+            demo: false,
+            theme: crate::theme::Theme::new(&ctx, true),
+            memory: crate::window::Memory::load(true),
+            summons: Arc::default(),
+        };
+        app.tracks.insert(
+            "a".into(),
+            Tracks {
+                rx: loading,
+                list: None,
+            },
+        );
+        let (_, rx) = mpsc::channel();
+        app.tracks.insert(
+            "b".into(),
+            Tracks {
+                rx,
+                list: Some(Ok(vec![Track {
+                    title: Some("B track".into()),
+                    url: "/tmp/missing-b.wav".into(),
+                    provider: None,
+                }])),
+            },
+        );
+        app.act(&ctx, Action::PlayChannel("a".into(), "A".into()));
+        app.act(&ctx, Action::Play(0));
+        ready
+            .send(Ok(vec![Track {
+                title: Some("A track".into()),
+                url: "/tmp/missing-a.wav".into(),
+                provider: None,
+            }]))
+            .unwrap();
+        app.receive();
+        let until = Instant::now() + Duration::from_secs(3);
+        while Instant::now() < until {
+            std::thread::sleep(Duration::from_millis(50));
+            app.receive();
+        }
+        assert_eq!(
+            app.player.state.queue.as_deref(),
+            Some("b"),
+            "an old overview request replaced the track selected afterwards"
+        );
     }
 }
