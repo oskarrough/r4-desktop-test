@@ -57,7 +57,7 @@ pub struct Track {
 }
 
 pub enum Command {
-    /// Replace the playlist with `tracks` unless `queue` is already loaded, then start at `index`.
+    /// Replace the playlist with `tracks` in shuffled order unless `queue` is already loaded, then start at `index`.
     Play {
         queue: String,
         channel: String,
@@ -133,6 +133,7 @@ impl Player {
             let mut engine = Engine {
                 mpv,
                 titles: Vec::new(),
+                order: Vec::new(),
                 state: State::default(),
             };
             loop {
@@ -173,6 +174,8 @@ impl Player {
 struct Engine {
     mpv: Mpv,
     titles: Vec<String>,
+    /// The channel's track at each place in mpv's playlist.
+    order: Vec<usize>,
     state: State,
 }
 
@@ -189,14 +192,16 @@ impl Engine {
                 if self.state.queue.as_deref() != Some(&queue) {
                     let _ = mpv.command("playlist-clear", &[]);
                     let _ = mpv.command("stop", &[]);
-                    for t in &tracks {
-                        let _ = mpv.command("loadfile", &[&t.url, "append"]);
+                    self.order = shuffle(tracks.len(), index, random());
+                    for &i in &self.order {
+                        let _ = mpv.command("loadfile", &[&tracks[i].url, "append"]);
                     }
                     self.titles = tracks.into_iter().map(|t| t.title).collect();
                     self.state.queue = Some(queue);
                     self.state.channel = channel;
                 }
-                let _ = mpv.command("playlist-play-index", &[&index.to_string()]);
+                let at = self.order.iter().position(|&i| i == index).unwrap_or(0);
+                let _ = mpv.command("playlist-play-index", &[&at.to_string()]);
                 let _ = mpv.set_property("pause", false);
             }
             Command::Toggle => {
@@ -241,7 +246,8 @@ impl Engine {
             .queue
             .as_ref()
             .and_then(|_| mpv.get_property::<i64>("playlist-pos").ok())
-            .and_then(|i| usize::try_from(i).ok());
+            .and_then(|i| usize::try_from(i).ok())
+            .and_then(|at| self.order.get(at).copied());
         s.title = s
             .index
             .and_then(|i| self.titles.get(i).cloned())
@@ -261,9 +267,70 @@ impl Engine {
     }
 }
 
+/// A different number on every call, enough to shuffle by.
+pub fn random() -> u64 {
+    use std::hash::{BuildHasher, Hasher};
+    std::collections::hash_map::RandomState::new()
+        .build_hasher()
+        .finish()
+}
+
+/// A track to start a channel of `n` on, other than `not` when there's a choice.
+pub fn pick(n: usize, not: Option<usize>, seed: u64) -> usize {
+    match not.filter(|&c| c < n && n > 1) {
+        Some(c) => {
+            let i = (seed % (n as u64 - 1)) as usize;
+            if i >= c { i + 1 } else { i }
+        }
+        None => (seed % n.max(1) as u64) as usize,
+    }
+}
+
+/// The `n` tracks in random order, `first` leading.
+fn shuffle(n: usize, first: usize, mut seed: u64) -> Vec<usize> {
+    let mut rest: Vec<usize> = (0..n).filter(|&i| i != first).collect();
+    for i in (1..rest.len()).rev() {
+        // xorshift64; a zero seed would stay zero.
+        seed = seed.max(1);
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        rest.swap(i, (seed % (i as u64 + 1)) as usize);
+    }
+    std::iter::once(first)
+        .filter(|&f| f < n)
+        .chain(rest)
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shuffles_every_track_once_from_the_chosen_one() {
+        let orders: Vec<Vec<usize>> = (1..=5).map(|seed| shuffle(10, 3, seed)).collect();
+        for o in &orders {
+            assert_eq!(o[0], 3);
+            let mut sorted = o.clone();
+            sorted.sort();
+            assert_eq!(sorted, (0..10).collect::<Vec<_>>());
+        }
+        assert!(orders.windows(2).any(|w| w[0] != w[1]), "never shuffled");
+        assert_eq!(shuffle(1, 0, 7), vec![0]);
+        assert!(shuffle(0, 0, 7).is_empty());
+    }
+
+    #[test]
+    fn playing_a_channel_again_starts_elsewhere() {
+        for seed in 0..50 {
+            assert_ne!(pick(5, Some(2), seed), 2);
+            assert!(pick(5, Some(2), seed) < 5);
+            assert!(pick(5, None, seed) < 5);
+        }
+        assert_eq!(pick(1, Some(0), 9), 0);
+        assert_eq!(pick(0, None, 9), 0);
+    }
 
     /// One second of silent 8 kHz mono WAV.
     fn silence(path: &std::path::Path) {
@@ -315,6 +382,38 @@ mod tests {
         }
         assert_eq!(p.state.title, "good");
         assert_eq!(p.state.channel, "C");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn reports_the_chosen_track_through_the_shuffle() {
+        let dir = std::env::temp_dir().join(format!("r4-shuffle-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let tracks = (0..6)
+            .map(|i| {
+                let path = dir.join(format!("{i}.wav"));
+                silence(&path);
+                Track {
+                    url: path.to_str().unwrap().to_string(),
+                    title: format!("t{i}"),
+                }
+            })
+            .collect();
+        let mut p = Player::spawn(&[("ao", "null"), ("keep-open", "yes")], || {});
+        p.send(Command::Play {
+            queue: "c".into(),
+            channel: "C".into(),
+            tracks,
+            index: 4,
+        });
+        let start = std::time::Instant::now();
+        while p.state.dur.is_none() {
+            assert!(start.elapsed().as_secs() < 10, "never loaded");
+            std::thread::sleep(Duration::from_millis(50));
+            p.update();
+        }
+        assert_eq!(p.state.index, Some(4));
+        assert_eq!(p.state.title, "t4");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }
