@@ -31,3 +31,10 @@ fastframe-now-playing = { git = "https://github.com/crmne/fastframe", tag = "v0.
 
 [target.'cfg(target_os = "linux")'.dependencies]
 zbus = { version = "5", default-features = false, features = ["blocking-api", "async-io"] }
+
+# Dependencies' debug info was most of a 3GB target per worktree; panics still name our lines.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
