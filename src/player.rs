@@ -1,25 +1,54 @@
 //! Plays a channel's tracklist through mpv's own playlist, which gives us next, previous and skipping past tracks that fail to load.
 //! mpv lives on its own thread: the window sends commands and reads the latest state, so it never waits on mpv.
 use libmpv2::Mpv;
+use libmpv2::events::Event;
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::time::Duration;
 
 /// How often the thread looks at mpv when no command arrives; the seek bar moves at this pace.
 const POLL: Duration = Duration::from_millis(200);
 
+/// An mpv whose warnings come as events for [`log_event`], so they land in the log file rather than only the terminal.
 pub fn mpv(extra: &[(&str, &str)]) -> libmpv2::Result<Mpv> {
-    Mpv::with_initializer(|init| {
+    let mpv = Mpv::with_initializer(|init| {
         init.set_option("vid", "no")?;
         init.set_option("ytdl", "yes")?;
         init.set_option("ytdl-format", "bestaudio/best")?;
-        init.set_option("terminal", "yes")?;
-        init.set_option("msg-level", "all=warn")?;
         init.set_option("audio-client-name", "radio4000")?;
         for (k, v) in extra {
             init.set_option(k, *v)?;
         }
         Ok(())
-    })
+    })?;
+    // SAFETY: the handle is live for as long as `mpv`, and the level is a C string.
+    unsafe { libmpv2_sys::mpv_request_log_messages(mpv.ctx.as_ptr(), c"warn".as_ptr()) };
+    Ok(mpv)
+}
+
+/// Logs mpv's warnings and errors, and each track that loads or fails.
+pub fn log_event(mpv: &Mpv, event: &libmpv2::Result<Event>) {
+    match event {
+        Ok(Event::LogMessage {
+            prefix,
+            level,
+            text,
+            ..
+        }) => {
+            let level = if matches!(*level, "fatal" | "error") {
+                log::Level::Error
+            } else {
+                log::Level::Warn
+            };
+            log::log!(target: "mpv", level, "{prefix}: {}", text.trim_end());
+        }
+        Ok(Event::FileLoaded) => {
+            let title: String = mpv.get_property("media-title").unwrap_or_default();
+            log::info!("playing {title}");
+        }
+        // libmpv2 reports a failed end-file as Err, dropping the event itself.
+        Err(e) => log::warn!("track failed: {e}"),
+        _ => {}
+    }
 }
 
 pub struct Track {
@@ -112,8 +141,10 @@ impl Player {
                     Err(RecvTimeoutError::Timeout) => {}
                     Err(RecvTimeoutError::Disconnected) => return,
                 }
-                // Nobody reads mpv's events, so drop them before its queue fills.
-                while engine.mpv.wait_event(0.0).is_some() {}
+                // Read mpv's events into the log before its queue fills.
+                while let Some(event) = engine.mpv.wait_event(0.0) {
+                    log_event(&engine.mpv, &event);
+                }
                 if engine.look() {
                     send(&engine.state);
                 }

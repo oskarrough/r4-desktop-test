@@ -81,8 +81,9 @@ pub fn run() -> eframe::Result {
                         ctx.request_repaint();
                     }
                     let fresh = channels::fetch();
-                    if let Ok(list) = &fresh {
-                        crate::cache::save(list);
+                    match &fresh {
+                        Ok(list) => crate::cache::save(list),
+                        Err(e) => log::warn!("could not load channels: {e}"),
                     }
                     let _ = tx.send(fresh);
                     ctx.request_repaint();
@@ -555,7 +556,11 @@ impl Tracks {
         let (tx, rx) = mpsc::channel();
         let (ctx, slug) = (ctx.clone(), slug.to_string());
         std::thread::spawn(move || {
-            let _ = tx.send(tracks::fetch(&slug));
+            let tracks = tracks::fetch(&slug);
+            if let Err(e) = &tracks {
+                log::warn!("could not load the tracks of {slug}: {e}");
+            }
+            let _ = tx.send(tracks);
             ctx.request_repaint();
         });
         Tracks { rx, list: None }
