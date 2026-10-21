@@ -87,6 +87,8 @@ pub fn run() -> eframe::Result {
                 scrub: None,
                 volume: None,
                 scroll: Scroll::default(),
+                channel_scroll: Scroll::default(),
+                keyed: false,
                 actions: Vec::new(),
                 demo: demo.is_some(),
             };
@@ -133,7 +135,11 @@ struct App {
     scrub: Option<Scrub>,
     /// The volume last asked for, shown on the meter until it fades.
     volume: Option<Volume>,
+    /// The tracklist's scroll and cursor, and the channel list's.
     scroll: Scroll,
+    channel_scroll: Scroll,
+    /// The arrow keys are in use: show the cursor until the pointer moves.
+    keyed: bool,
     actions: Vec<Action>,
     /// Showing the demo: the player's state stays as the demo set it.
     demo: bool,
@@ -162,6 +168,8 @@ struct Scrub {
 struct Scroll {
     reveal: Option<Reveal>,
     glide: Option<Glide>,
+    /// The row the arrow keys are on.
+    cursor: usize,
     /// Where the list was drawn last frame.
     offset: f32,
 }
@@ -170,6 +178,8 @@ struct Scroll {
 enum Reveal {
     Jump,
     Glide,
+    /// Scroll just enough to show this row, as an iPod list does.
+    Show(usize),
 }
 
 #[derive(Clone, Copy)]
@@ -204,6 +214,10 @@ enum Action {
     Toggle,
     /// Up or down by this much.
     Volume(f64),
+    /// Move the list's cursor by this many rows.
+    Cursor(isize),
+    /// Open or play the row under the cursor.
+    Choose,
     ToggleMute,
     Send(Command),
 }
@@ -235,7 +249,16 @@ impl eframe::App for App {
                 .default_size(240.0)
                 .show(ui, |ui| {
                     let rect = ui.max_rect();
-                    channel_list(ui, &self.channels, open, playing, false, actions);
+                    channel_list(
+                        ui,
+                        &self.channels,
+                        open,
+                        playing,
+                        false,
+                        &mut self.channel_scroll,
+                        self.keyed && self.open.is_none(),
+                        actions,
+                    );
                     chrome(ui, rect, "Radio4000", None, false, actions);
                 });
             egui::CentralPanel::no_frame().frame(flat).show(ui, |ui| {
@@ -250,6 +273,7 @@ impl eframe::App for App {
                             state,
                             false,
                             &mut self.scroll,
+                            self.keyed,
                             actions,
                         )
                     }
@@ -270,12 +294,22 @@ impl eframe::App for App {
                             state,
                             true,
                             &mut self.scroll,
+                            self.keyed,
                             actions,
                         )
                     }
                     None => {
                         let rect = ui.max_rect();
-                        channel_list(ui, &self.channels, None, playing, true, actions);
+                        channel_list(
+                            ui,
+                            &self.channels,
+                            None,
+                            playing,
+                            true,
+                            &mut self.channel_scroll,
+                            self.keyed,
+                            actions,
+                        );
                         chrome(ui, rect, "Radio4000", None, false, actions);
                     }
                 }
@@ -340,6 +374,15 @@ impl App {
             if self.now {
                 key(Key::ArrowUp, Action::Volume(STEP));
                 key(Key::ArrowDown, Action::Volume(-STEP));
+            } else {
+                key(Key::ArrowUp, Action::Cursor(-1));
+                key(Key::ArrowDown, Action::Cursor(1));
+                key(Key::PageUp, Action::Cursor(-8));
+                key(Key::PageDown, Action::Cursor(8));
+                key(Key::Enter, Action::Choose);
+            }
+            if i.pointer.delta() != egui::Vec2::ZERO {
+                self.keyed = false;
             }
             if i.pointer.button_pressed(PointerButton::Extra1) {
                 self.actions.push(Action::Back);
@@ -349,7 +392,54 @@ impl App {
 
     fn act(&mut self, ctx: &egui::Context, a: Action) {
         match a {
+            Action::Cursor(by) => {
+                // The first press only shows where the cursor is.
+                let by = if self.keyed { by } else { 0 };
+                self.keyed = true;
+                let (len, scroll) = match &self.open {
+                    Some(o) => (
+                        match self.tracks.get(&o.slug).and_then(|t| t.list.as_ref()) {
+                            Some(Ok(l)) => l.len(),
+                            _ => 0,
+                        },
+                        &mut self.scroll,
+                    ),
+                    None => (
+                        match &self.channels {
+                            Some(Ok(l)) => l.len(),
+                            _ => 0,
+                        },
+                        &mut self.channel_scroll,
+                    ),
+                };
+                if len > 0 {
+                    scroll.cursor = scroll.cursor.saturating_add_signed(by).min(len - 1);
+                    scroll.reveal = Some(Reveal::Show(scroll.cursor));
+                }
+            }
+            Action::Choose if !self.now => match &self.open {
+                Some(_) => self.play(self.scroll.cursor),
+                None => {
+                    if let Some(Ok(list)) = &self.channels
+                        && let Some(c) = list.get(self.channel_scroll.cursor)
+                    {
+                        let a = Action::Open(c.slug.clone(), c.name.clone());
+                        self.act(ctx, a);
+                    }
+                }
+            },
+            Action::Choose => {}
             Action::Open(slug, name) => {
+                if let Some(Ok(list)) = &self.channels
+                    && let Some(i) = list.iter().position(|c| c.slug == slug)
+                {
+                    self.channel_scroll.cursor = i;
+                }
+                self.scroll.cursor = match self.player.state.queue.as_deref() == Some(&slug) {
+                    true => self.player.state.index.unwrap_or(0),
+                    false => 0,
+                };
+                self.scroll.glide = None;
                 self.tracks
                     .entry(slug.clone())
                     .or_insert_with(|| Tracks::fetch(ctx, &slug));
@@ -366,7 +456,10 @@ impl App {
                 }
             }
             Action::ShowNow => self.now = self.player.state.queue.is_some(),
-            Action::Play(index) => self.play(index),
+            Action::Play(index) => {
+                self.scroll.cursor = index;
+                self.play(index);
+            }
             // Space with nothing loaded starts the open channel from the top.
             Action::Toggle if self.player.state.queue.is_none() => self.play(0),
             Action::Toggle => self.player.send(Command::Toggle),
@@ -693,6 +786,8 @@ fn channel_list(
     open: Option<&str>,
     playing: Option<&str>,
     opens: bool,
+    scroll: &mut Scroll,
+    keyed: bool,
     actions: &mut Vec<Action>,
 ) {
     let list = match channels {
@@ -700,9 +795,10 @@ fn channel_list(
         Some(Err(e)) => return note(ui, &format!("Could not load channels: {e}")),
         Some(Ok(list)) => list,
     };
-    rows(ui, list.len(), None, None, |ui, i| {
+    let cursor = keyed.then_some(scroll.cursor);
+    rows(ui, list.len(), None, Some(scroll), |ui, i| {
         let c = &list[i];
-        let selected = open == Some(c.slug.as_str());
+        let selected = open == Some(c.slug.as_str()) || cursor == Some(i);
         if row(
             ui,
             &c.name,
@@ -737,6 +833,7 @@ fn tracklist(
     s: &State,
     back: bool,
     scroll: &mut Scroll,
+    keyed: bool,
     actions: &mut Vec<Action>,
 ) {
     let rect = ui.max_rect();
@@ -745,8 +842,19 @@ fn tracklist(
         Some(Err(e)) => note(ui, &format!("Could not load tracks: {e}")),
         Some(Ok(list)) => {
             let current = s.index.filter(|_| s.queue.as_deref() == Some(&open.slug));
+            let cursor = keyed.then_some(scroll.cursor);
             rows(ui, list.len(), current, Some(scroll), |ui, i| {
-                if row(ui, title(&list[i]), None, false, current == Some(i), false).clicked() {
+                let selected = cursor == Some(i);
+                if row(
+                    ui,
+                    title(&list[i]),
+                    None,
+                    selected,
+                    current == Some(i),
+                    false,
+                )
+                .clicked()
+                {
                     actions.push(Action::Play(i));
                 }
             });
@@ -1015,23 +1123,42 @@ fn rows(
         area.show_viewport(ui, |ui, vp| draw(ui, vp));
         return;
     };
-    if let (Some(i), Some(how)) = (target, sc.reveal.take()) {
-        // Centre it in what's left between the top band and the mini player.
-        let middle = (TOP + view - DOCK - 4.0 * UNIT) / 2.0;
-        let to = (TOP + i as f32 * ROW + ROW / 2.0 - middle).clamp(0.0, (height - view).max(0.0));
-        match how {
-            Reveal::Jump => {
-                sc.glide = None;
-                area = area.vertical_scroll_offset(to);
+    let room = DOCK + 6.0 * UNIT;
+    match sc.reveal.take() {
+        Some(Reveal::Show(i)) => {
+            // Just enough to bring the row out from under the top band or the mini player.
+            let top = TOP + i as f32 * ROW;
+            let mut to = sc.offset;
+            if top < to + TOP {
+                to = top - TOP;
+            } else if top + ROW > to + view - room {
+                to = top + ROW - (view - room);
             }
-            Reveal::Glide => {
-                sc.glide = Some(Glide {
-                    from: sc.offset,
-                    to,
-                    at: Instant::now(),
-                });
+            sc.glide = None;
+            area = area.vertical_scroll_offset(to.clamp(0.0, (height - view).max(0.0)));
+        }
+        Some(how) => {
+            if let Some(i) = target {
+                // Centre it in what's left between the top band and the mini player.
+                let middle = (TOP + view - room + 2.0 * UNIT) / 2.0;
+                let to = (TOP + i as f32 * ROW + ROW / 2.0 - middle)
+                    .clamp(0.0, (height - view).max(0.0));
+                if matches!(how, Reveal::Jump) {
+                    sc.glide = None;
+                    area = area.vertical_scroll_offset(to);
+                } else {
+                    sc.glide = Some(Glide {
+                        from: sc.offset,
+                        to,
+                        at: Instant::now(),
+                    });
+                }
+            } else {
+                // Not this list's turn yet; keep it for when the track is here.
+                sc.reveal = Some(how);
             }
         }
+        None => {}
     }
     // Scrolling by hand takes over from a glide.
     if ui.input(|i| i.smooth_scroll_delta.y != 0.0) {
