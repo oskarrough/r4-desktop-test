@@ -31,8 +31,8 @@ pub const DISABLED: Color32 = Color32::from_rgb(0x4a, 0x4a, 0x47);
 /// What floats: round buttons and the title pill, and their edge.
 pub const SURFACE: Color32 = Color32::from_rgb(0x1e, 0x1e, 0x1d);
 pub const EDGE: Color32 = Color32::from_rgb(0x2e, 0x2e, 0x2c);
-/// Only for what is live: progress, the playing dot, the channel link. Monochrome for now; a colour is one line away.
-pub const ACCENT: Color32 = TEXT;
+/// Only for what is live: progress, the playing dot, the channel link.
+pub const ACCENT: Color32 = Color32::from_rgb(0xa9, 0x7b, 0xff);
 
 #[allow(dead_code)]
 enum Typeface {

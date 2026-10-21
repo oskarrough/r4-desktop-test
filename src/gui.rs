@@ -251,7 +251,6 @@ impl eframe::App for App {
                 .resizable(true)
                 .default_size(240.0)
                 .show(ui, |ui| {
-                    let rect = ui.max_rect();
                     channel_list(
                         ui,
                         &self.channels,
@@ -262,7 +261,6 @@ impl eframe::App for App {
                         self.keyed && self.open.is_none(),
                         actions,
                     );
-                    chrome(ui, rect, "Radio4000", None, false, actions);
                 });
             egui::CentralPanel::no_frame().frame(flat).show(ui, |ui| {
                 match &self.open {
@@ -302,7 +300,6 @@ impl eframe::App for App {
                         )
                     }
                     None => {
-                        let rect = ui.max_rect();
                         channel_list(
                             ui,
                             &self.channels,
@@ -313,7 +310,6 @@ impl eframe::App for App {
                             self.keyed,
                             actions,
                         );
-                        chrome(ui, rect, "Radio4000", None, false, actions);
                     }
                 }
                 dock(ui, state, face_of_playing, &mut self.scrub, actions);
@@ -723,14 +719,18 @@ fn now_playing(
     let cy = rect.top() + 2.0 * UNIT + KNOB / 2.0;
     back(ui, pos2(rect.left() + 2.0 * UNIT + KNOB / 2.0, cy), actions);
     speaker(ui, rect, s, volume, actions);
-    let area = Rect::from_x_y_ranges(rect.x_range(), rect.top() + TOP..=rect.bottom());
+    // As much room under the buttons as the knobs leave above the group.
+    let area = Rect::from_x_y_ranges(
+        rect.x_range(),
+        rect.top() + TOP..=rect.bottom() - 6.0 * UNIT,
+    );
     let x = area.left() + MARGIN;
     let width = area.width() - 2.0 * MARGIN;
 
     let channel = fit(ui, &s.channel, font(BODY, Weight::Regular), ACCENT, width);
     let big = 2.0 * ICON;
     // Each step below is a gap on the grid, from the title's top to the buttons' bottom.
-    let below = UNIT + channel.size().y + 6.0 * UNIT + 8.0 * UNIT + 8.0 * UNIT + big;
+    let below = UNIT + channel.size().y + 6.0 * UNIT + 8.0 * UNIT + 6.0 * UNIT + big;
     // The title takes two lines where they fit, one in a small window.
     let title = |rows| {
         let mut job =
@@ -757,9 +757,9 @@ fn now_playing(
             vec2(side, side),
         );
         let px = (side * ui.pixels_per_point()).round() as u32;
-        ui.painter().rect_filled(at, 2.0 * UNIT, SURFACE);
+        ui.painter().rect_filled(at, 0.0, SURFACE);
         egui::Image::new(channels::avatar_url(id, px))
-            .corner_radius(2.0 * UNIT)
+            .corner_radius(0.0)
             .show_loading_spinner(false)
             .paint_at(ui, at);
         y += side + gap;
@@ -792,10 +792,10 @@ fn now_playing(
     );
     let g = fit(ui, &left, small, SECONDARY, width);
     put(ui, g.clone(), x + width - g.size().x, y);
-    y += 8.0 * UNIT + big / 2.0;
+    y += 6.0 * UNIT + big / 2.0;
 
     let loaded = s.queue.is_some();
-    let step = (width / 3.0).min(24.0 * UNIT);
+    let step = (width / 3.0).min(16.0 * UNIT);
     let mid = pos2(area.center().x, y);
     let big_hit = |ui: &mut Ui, icon, c, enabled| {
         icon_button_sized(ui, icon, c, big * 0.75, 12.0 * UNIT, enabled)
@@ -835,7 +835,7 @@ fn channel_list(
         Some(Ok(list)) => list,
     };
     let cursor = keyed.then_some(scroll.cursor);
-    rows(ui, list.len(), None, Some(scroll), |ui, i| {
+    rows(ui, list.len(), 2.0 * UNIT, None, Some(scroll), |ui, i| {
         let c = &list[i];
         let selected = open == Some(c.slug.as_str()) || cursor == Some(i);
         if row(
@@ -882,7 +882,7 @@ fn tracklist(
         Some(Ok(list)) => {
             let current = s.index.filter(|_| s.queue.as_deref() == Some(&open.slug));
             let cursor = keyed.then_some(scroll.cursor);
-            rows(ui, list.len(), current, Some(scroll), |ui, i| {
+            rows(ui, list.len(), TOP, current, Some(scroll), |ui, i| {
                 let selected = cursor == Some(i);
                 if row(
                     ui,
@@ -1131,26 +1131,27 @@ fn face(ui: &Ui, at: Rect, image: Option<&str>, name: &str) {
     }
 }
 
-/// A list of `n` rows below the top band, drawing only the visible ones. With a `scroll`, it brings `target` to
+/// A list of `n` rows starting `inset` down, which is room for what floats at the top, drawing only the visible ones. With a `scroll`, it brings `target` to
 /// its middle as the scroll asks.
 fn rows(
     ui: &mut Ui,
     n: usize,
+    inset: f32,
     target: Option<usize>,
     scroll: Option<&mut Scroll>,
     mut row: impl FnMut(&mut Ui, usize),
 ) {
     let view = ui.available_height();
-    let height = TOP + n as f32 * ROW + DOCK + 6.0 * UNIT;
+    let height = inset + n as f32 * ROW + DOCK + 6.0 * UNIT;
     let mut area = egui::ScrollArea::vertical().auto_shrink(false);
     let mut draw = |ui: &mut Ui, vp: Rect| {
         ui.set_height(height);
         let top = ui.max_rect().top();
-        let first = ((vp.min.y - TOP) / ROW).floor().max(0.0) as usize;
-        let last = (((vp.max.y - TOP) / ROW).ceil().max(0.0) as usize).min(n);
+        let first = ((vp.min.y - inset) / ROW).floor().max(0.0) as usize;
+        let last = (((vp.max.y - inset) / ROW).ceil().max(0.0) as usize).min(n);
         for i in first..last {
             let at = Rect::from_min_size(
-                pos2(ui.max_rect().left(), top + TOP + i as f32 * ROW),
+                pos2(ui.max_rect().left(), top + inset + i as f32 * ROW),
                 vec2(ui.max_rect().width(), ROW),
             );
             ui.scope_builder(egui::UiBuilder::new().max_rect(at).id_salt(i), |ui| {
@@ -1166,10 +1167,10 @@ fn rows(
     match sc.reveal.take() {
         Some(Reveal::Show(i)) => {
             // Just enough to bring the row out from under the top band or the mini player.
-            let top = TOP + i as f32 * ROW;
+            let top = inset + i as f32 * ROW;
             let mut to = sc.offset;
-            if top < to + TOP {
-                to = top - TOP;
+            if top < to + inset {
+                to = top - inset;
             } else if top + ROW > to + view - room {
                 to = top + ROW - (view - room);
             }
@@ -1179,8 +1180,8 @@ fn rows(
         Some(how) => {
             if let Some(i) = target {
                 // Centre it in what's left between the top band and the mini player.
-                let middle = (TOP + view - room + 2.0 * UNIT) / 2.0;
-                let to = (TOP + i as f32 * ROW + ROW / 2.0 - middle)
+                let middle = (inset + view - room + 2.0 * UNIT) / 2.0;
+                let to = (inset + i as f32 * ROW + ROW / 2.0 - middle)
                     .clamp(0.0, (height - view).max(0.0));
                 if matches!(how, Reveal::Jump) {
                     sc.glide = None;

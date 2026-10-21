@@ -183,12 +183,20 @@ impl Engine {
             Command::SeekBy(secs) => {
                 let _ = mpv.command("seek", &[&secs.to_string(), "relative"]);
             }
+            // The audio server's own stream volume and mute act at once; mpv's would wait out its audio buffer.
             Command::Volume(v) => {
-                let _ = mpv.set_property("volume", v.clamp(0.0, 100.0));
-                let _ = mpv.set_property("mute", false);
+                let v = v.clamp(0.0, 100.0);
+                if mpv.set_property("ao-volume", v).is_err() {
+                    let _ = mpv.set_property("volume", v);
+                }
+                if mpv.set_property("ao-mute", false).is_err() {
+                    let _ = mpv.set_property("mute", false);
+                }
             }
             Command::ToggleMute => {
-                let _ = mpv.command("cycle", &["mute"]);
+                if mpv.command("cycle", &["ao-mute"]).is_err() {
+                    let _ = mpv.command("cycle", &["mute"]);
+                }
             }
         }
     }
@@ -210,8 +218,14 @@ impl Engine {
         s.paused = mpv.get_property("pause").unwrap_or(false);
         s.pos = mpv.get_property("time-pos").unwrap_or(0.0);
         s.dur = mpv.get_property("duration").ok();
-        s.volume = mpv.get_property("volume").unwrap_or(100.0);
-        s.muted = mpv.get_property("mute").unwrap_or(false);
+        s.volume = mpv
+            .get_property("ao-volume")
+            .or_else(|_| mpv.get_property("volume"))
+            .unwrap_or(100.0);
+        s.muted = mpv
+            .get_property("ao-mute")
+            .or_else(|_| mpv.get_property("mute"))
+            .unwrap_or(false);
         *s != before
     }
 }
