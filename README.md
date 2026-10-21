@@ -1,10 +1,8 @@
 # Radio4000 desktop
 
-Native Radio4000 player, but mostly exploring building native apps with rust. 
+This is a native Radio4000 player for Linux, macOS and Windows.  
 
 Pick a channel, play its tracks. Audio goes through libmpv, which resolves YouTube and friends.
-
-Keys: Space play/pause, n/p next/previous, left/right seek 10s, Esc back.
 
 ## Install
 
@@ -20,9 +18,11 @@ Windows:
 irm https://raw.githubusercontent.com/oskarrough/r4-desktop-test/main/install.ps1 | iex
 ```
 
-Run the same line again to update. Radio4000 then opens from your app launcher, Applications on a Mac, or the Start Menu on Windows.
+Radio4000 then opens from your app launcher, Applications on a Mac, or the Start Menu on Windows. Run the same line again to update.
 
 Linux downloads include everything needed to play on Ubuntu 24.04 or newer, and similar desktop systems. You can also download the [AppImage](https://github.com/oskarrough/r4-desktop-test/releases/download/latest/radio4000-x86_64.AppImage) directly.
+
+---
 
 <details>
 <summary>Keep YouTube playback working</summary>
