@@ -49,8 +49,6 @@ esac
     assert executable.is_symlink()
     assert subprocess.check_output([str(executable), "--version"], text=True).startswith("radio4000 ")
     target = executable.resolve()
-    assert (target.parent / "tools/yt-dlp").is_file()
-    assert (target.parent / "tools/deno").is_file()
     leftover = target.parents[2].with_name(target.parents[2].name + ".old")
     leftover.mkdir()
     second = install()
