@@ -16,3 +16,4 @@ egui_extras = { version = "0.36.2", features = ["svg", "http", "image"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
 fastframe-emoji = { git = "https://github.com/crmne/fastframe", tag = "v0.14.0" }
 fastframe-icons = { git = "https://github.com/crmne/fastframe", tag = "v0.14.0", version = "0.14.0" }
+fastframe-theme = { git = "https://github.com/crmne/fastframe", tag = "v0.14.0" }

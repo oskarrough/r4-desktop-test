@@ -227,6 +227,7 @@ enum Action {
 
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let pal = palette(ui);
         self.receive();
         self.keys(ui.ctx());
         let wide = ui.ctx().content_rect().width() >= WIDE;
@@ -234,7 +235,7 @@ impl eframe::App for App {
         let playing = state.queue.as_deref();
         let actions = &mut self.actions;
 
-        let flat = egui::Frame::NONE.fill(BG);
+        let flat = egui::Frame::NONE.fill(pal.bg);
         let face_of_playing = playing.and_then(|q| avatar(&self.channels, q));
         if self.now {
             egui::CentralPanel::no_frame().frame(flat).show(ui, |ui| {
@@ -548,6 +549,7 @@ fn dock(
     scrub: &mut Option<Scrub>,
     actions: &mut Vec<Action>,
 ) {
+    let pal = palette(ui);
     if s.queue.is_none() && s.error.is_none() {
         return;
     }
@@ -566,13 +568,13 @@ fn dock(
     p.rect_filled(
         Rect::from_x_y_ranges(pane.x_range(), rect.top()..=pane.bottom()),
         0.0,
-        BG,
+        pal.bg,
     );
     let mut mesh = egui::Mesh::default();
     mesh.colored_vertex(band.left_top(), Color32::TRANSPARENT);
     mesh.colored_vertex(band.right_top(), Color32::TRANSPARENT);
-    mesh.colored_vertex(band.left_bottom(), BG);
-    mesh.colored_vertex(band.right_bottom(), BG);
+    mesh.colored_vertex(band.left_bottom(), pal.bg);
+    mesh.colored_vertex(band.right_bottom(), pal.bg);
     mesh.add_triangle(0, 1, 2);
     mesh.add_triangle(1, 3, 2);
     p.add(mesh);
@@ -582,13 +584,17 @@ fn dock(
             offset: [0, 4],
             blur: 16,
             spread: 0,
-            color: Color32::from_black_alpha(96),
+            color: pal.shadow,
         }
         .as_shape(rect, round * 0.6),
     );
     let open = ui.interact(rect, ui.id().with("dock"), Sense::click());
-    let fill = if open.hovered() { SELECTED } else { SURFACE };
-    squircle(ui, rect, round, fill, EDGE);
+    let fill = if open.hovered() {
+        pal.selected
+    } else {
+        pal.surface
+    };
+    squircle(ui, rect, round, fill, pal.edge);
     if open.clicked() && s.queue.is_some() {
         actions.push(Action::ShowNow);
     }
@@ -626,7 +632,7 @@ fn dock(
             ui,
             &format!("Can't play: {e}"),
             font(SMALL, Weight::Regular),
-            SECONDARY,
+            pal.secondary,
             width,
         );
         put(ui, g, x, cy);
@@ -637,14 +643,14 @@ fn dock(
     });
     put(
         ui,
-        fit(ui, &s.title, font(BODY, Weight::SemiBold), TEXT, width),
+        fit(ui, &s.title, font(BODY, Weight::SemiBold), pal.text, width),
         x,
         cy - 2.0 * UNIT,
     );
     let sub = format!("{}{time}", s.channel);
     put(
         ui,
-        fit(ui, &sub, font(SMALL, Weight::Regular), SECONDARY, width),
+        fit(ui, &sub, font(SMALL, Weight::Regular), pal.secondary, width),
         x,
         cy + 2.0 * UNIT,
     );
@@ -715,6 +721,7 @@ fn now_playing(
     volume: Option<Volume>,
     actions: &mut Vec<Action>,
 ) {
+    let pal = palette(ui);
     let rect = ui.max_rect();
     let cy = rect.top() + 2.0 * UNIT + KNOB / 2.0;
     back(ui, pos2(rect.left() + 2.0 * UNIT + KNOB / 2.0, cy), actions);
@@ -727,14 +734,24 @@ fn now_playing(
     let x = area.left() + MARGIN;
     let width = area.width() - 2.0 * MARGIN;
 
-    let channel = fit(ui, &s.channel, font(BODY, Weight::Regular), ACCENT, width);
+    let channel = fit(
+        ui,
+        &s.channel,
+        font(BODY, Weight::Regular),
+        pal.accent,
+        width,
+    );
     let big = 2.0 * ICON;
     // Each step below is a gap on the grid, from the title's top to the buttons' bottom.
     let below = UNIT + channel.size().y + 6.0 * UNIT + 8.0 * UNIT + 6.0 * UNIT + big;
     // The title takes two lines where they fit, one in a small window.
     let title = |rows| {
-        let mut job =
-            LayoutJob::simple(s.title.clone(), font(LARGE, Weight::SemiBold), TEXT, width);
+        let mut job = LayoutJob::simple(
+            s.title.clone(),
+            font(LARGE, Weight::SemiBold),
+            pal.text,
+            width,
+        );
         job.wrap.max_rows = rows;
         ui.painter().layout_job(job)
     };
@@ -757,7 +774,7 @@ fn now_playing(
             vec2(side, side),
         );
         let px = (side * ui.pixels_per_point()).round() as u32;
-        ui.painter().rect_filled(at, 0.0, SURFACE);
+        ui.painter().rect_filled(at, 0.0, pal.surface);
         egui::Image::new(channels::avatar_url(id, px))
             .corner_radius(0.0)
             .show_loading_spinner(false)
@@ -782,7 +799,13 @@ fn now_playing(
     let small = font(SMALL, Weight::Regular);
     put(
         ui,
-        fit(ui, &clock(shown(s, scrub)), small.clone(), SECONDARY, width),
+        fit(
+            ui,
+            &clock(shown(s, scrub)),
+            small.clone(),
+            pal.secondary,
+            width,
+        ),
         x,
         y,
     );
@@ -790,7 +813,7 @@ fn now_playing(
         || "-:--".into(),
         |d| format!("−{}", clock(d - shown(s, scrub))),
     );
-    let g = fit(ui, &left, small, SECONDARY, width);
+    let g = fit(ui, &left, small, pal.secondary, width);
     put(ui, g.clone(), x + width - g.size().x, y);
     y += 6.0 * UNIT + big / 2.0;
 
@@ -810,7 +833,8 @@ fn now_playing(
 }
 
 fn title_line(ui: &Ui, title: &str, width: f32) -> Arc<Galley> {
-    fit(ui, title, font(LARGE, Weight::SemiBold), TEXT, width)
+    let pal = palette(ui);
+    fit(ui, title, font(LARGE, Weight::SemiBold), pal.text, width)
 }
 
 /// Where the track is, or where it is being dragged to.
@@ -912,10 +936,11 @@ fn chrome(
     back_button: bool,
     actions: &mut Vec<Action>,
 ) {
+    let pal = palette(ui);
     let band = Rect::from_x_y_ranges(rect.x_range(), rect.top()..=rect.top() + TOP);
     let mut mesh = egui::Mesh::default();
-    mesh.colored_vertex(band.left_top(), BG);
-    mesh.colored_vertex(band.right_top(), BG);
+    mesh.colored_vertex(band.left_top(), pal.bg);
+    mesh.colored_vertex(band.right_top(), pal.bg);
     mesh.colored_vertex(band.left_bottom(), Color32::TRANSPARENT);
     mesh.colored_vertex(band.right_bottom(), Color32::TRANSPARENT);
     mesh.add_triangle(0, 1, 2);
@@ -938,25 +963,27 @@ fn chrome(
 
 /// A round button that floats over what's under it.
 fn knob(ui: &mut Ui, c: Pos2, id: &str) -> Response {
+    let pal = palette(ui);
     let r = ui.interact(
         Rect::from_center_size(c, vec2(KNOB, KNOB)),
         ui.id().with(id),
         Sense::click(),
     );
     let fill = if r.hovered() || r.has_focus() {
-        SELECTED
+        pal.selected
     } else {
-        SURFACE
+        pal.surface
     };
     ui.painter()
-        .circle(c, KNOB / 2.0 - 0.5, fill, egui::Stroke::new(1.0, EDGE));
+        .circle(c, KNOB / 2.0 - 0.5, fill, egui::Stroke::new(1.0, pal.edge));
     r
 }
 
 fn back(ui: &mut Ui, c: Pos2, actions: &mut Vec<Action>) {
+    let pal = palette(ui);
     let r = knob(ui, c, "back");
     // The chevron's ink is 6.5 wide from its tip; centre that.
-    chevron(ui, pos2(c.x - 3.25, c.y), -1.0, 5.0, TEXT);
+    chevron(ui, pos2(c.x - 3.25, c.y), -1.0, 5.0, pal.text);
     if r.on_hover_text("Back (esc)").clicked() {
         actions.push(Action::Back);
     }
@@ -964,6 +991,7 @@ fn back(ui: &mut Ui, c: Pos2, actions: &mut Vec<Action>) {
 
 /// The title in a pill centred on `c`, led by the avatar when there is one.
 fn pill(ui: &mut Ui, c: Pos2, title: &str, image: Option<&str>, max: f32) {
+    let pal = palette(ui);
     if title.is_empty() {
         return;
     }
@@ -977,7 +1005,7 @@ fn pill(ui: &mut Ui, c: Pos2, title: &str, image: Option<&str>, max: f32) {
         ui,
         title,
         font(BODY, Weight::SemiBold),
-        TEXT,
+        pal.text,
         max - lead - trail,
     );
     // Whole pixels from the ink's last soft edge, so both sides read the same.
@@ -987,8 +1015,8 @@ fn pill(ui: &mut Ui, c: Pos2, title: &str, image: Option<&str>, max: f32) {
     ui.painter().rect(
         rect,
         KNOB / 2.0,
-        SURFACE,
-        egui::Stroke::new(1.0, EDGE),
+        pal.surface,
+        egui::Stroke::new(1.0, pal.edge),
         egui::StrokeKind::Inside,
     );
     if image.is_some() {
@@ -1001,6 +1029,7 @@ fn pill(ui: &mut Ui, c: Pos2, title: &str, image: Option<&str>, max: f32) {
 /// A round speaker opposite back: click to mute. Scrolling anywhere on the view, or up and down, turns the volume
 /// like the Watch's crown, and the button's rim fills to show it, then fades.
 fn speaker(ui: &mut Ui, view: Rect, s: &State, volume: Option<Volume>, actions: &mut Vec<Action>) {
+    let pal = palette(ui);
     let side = 2.0 * UNIT + KNOB / 2.0;
     let c = pos2(view.right() - side, view.top() + side);
     let r = knob(ui, c, "speaker");
@@ -1009,7 +1038,7 @@ fn speaker(ui: &mut Ui, view: Rect, s: &State, volume: Option<Volume>, actions: 
     } else {
         (Icon::Speaker, "Mute (m)")
     };
-    icon.image(TEXT, ICON)
+    icon.image(pal.text, ICON)
         .paint_at(ui, Rect::from_center_size(c, vec2(ICON, ICON)));
     if r.on_hover_text(tip).clicked() {
         actions.push(Action::ToggleMute);
@@ -1044,14 +1073,14 @@ fn speaker(ui: &mut Ui, view: Rect, s: &State, volume: Option<Volume>, actions: 
     ui.painter().circle_stroke(
         c,
         radius,
-        egui::Stroke::new(2.0, HAIRLINE.gamma_multiply(fade)),
+        egui::Stroke::new(2.0, pal.hairline.gamma_multiply(fade)),
     );
     arc(
         ui,
         c,
         radius,
         level,
-        egui::Stroke::new(2.0, TEXT.gamma_multiply(fade)),
+        egui::Stroke::new(2.0, pal.text.gamma_multiply(fade)),
     );
     ui.ctx().request_repaint();
 }
@@ -1066,14 +1095,15 @@ fn row(
     playing: bool,
     opens: bool,
 ) -> Response {
+    let pal = palette(ui);
     let (rect, r) = ui.allocate_exact_size(vec2(ui.available_width(), ROW), Sense::click());
     if !ui.is_rect_visible(rect) {
         return r;
     }
     let fill = if selected {
-        SELECTED
+        pal.selected
     } else if r.hovered() || r.has_focus() {
-        HOVER
+        pal.hover
     } else {
         Color32::TRANSPARENT
     };
@@ -1083,10 +1113,10 @@ fn row(
     // The playing dot takes the chevron's place rather than sitting beside it.
     if playing {
         ui.painter()
-            .circle_filled(pos2(right - 3.0, cy), 3.0, ACCENT);
+            .circle_filled(pos2(right - 3.0, cy), 3.0, pal.accent);
         right -= 6.0 + 2.0 * UNIT;
     } else if opens {
-        chevron(ui, pos2(right, cy), 1.0, 4.0, DISABLED);
+        chevron(ui, pos2(right, cy), 1.0, 4.0, pal.disabled);
         right -= 4.0 + 2.0 * UNIT;
     }
     let mut x = rect.left() + MARGIN;
@@ -1097,7 +1127,7 @@ fn row(
     }
     put(
         ui,
-        fit(ui, label, font(BODY, Weight::Regular), TEXT, right - x),
+        fit(ui, label, font(BODY, Weight::Regular), pal.text, right - x),
         x,
         cy,
     );
@@ -1106,14 +1136,15 @@ fn row(
 
 /// A channel's avatar in a circle, or its first letter while there's no picture.
 fn face(ui: &Ui, at: Rect, image: Option<&str>, name: &str) {
+    let pal = palette(ui);
     let r = at.width() / 2.0;
-    ui.painter().circle_filled(at.center(), r, SURFACE);
+    ui.painter().circle_filled(at.center(), r, pal.surface);
     let initial: String = name.chars().take(1).flat_map(char::to_uppercase).collect();
     let g = fit(
         ui,
         &initial,
         font(SMALL, Weight::SemiBold),
-        SECONDARY,
+        pal.secondary,
         at.width(),
     );
     put(
@@ -1219,6 +1250,7 @@ fn rows(
 
 /// A quiet line where a list would be: loading, empty, or what went wrong.
 fn note(ui: &mut Ui, text: &str) {
+    let pal = palette(ui);
     ui.add_space(TOP);
     let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), ROW), Sense::hover());
     let x = rect.left() + MARGIN;
@@ -1226,7 +1258,7 @@ fn note(ui: &mut Ui, text: &str) {
         ui,
         text,
         font(BODY, Weight::Regular),
-        SECONDARY,
+        pal.secondary,
         rect.right() - MARGIN - x,
     );
     put(ui, g, x, rect.center().y);
@@ -1259,6 +1291,7 @@ fn put(ui: &Ui, g: Arc<Galley>, x: f32, y: f32) -> Rect {
 /// Paints a line with the ink of its first letter at `x` and its top at `y`, on whole pixels.
 /// Starting from the ink rather than the glyph's box lines text up with bars and icons at the same edge.
 fn put_top(ui: &Ui, g: Arc<Galley>, x: f32, y: f32) -> Rect {
+    let pal = palette(ui);
     let ppp = ui.pixels_per_point();
     let snap = |v| fastframe_text::snap_to_pixels(v, ppp);
     let ink = g
@@ -1268,7 +1301,7 @@ fn put_top(ui: &Ui, g: Arc<Galley>, x: f32, y: f32) -> Rect {
         .map_or(0.0, |g| g.uv_rect.offset.x);
     let pos = pos2(snap(x - ink), snap(y));
     let rect = Rect::from_min_size(pos, g.size());
-    ui.painter().galley(pos, g, TEXT);
+    ui.painter().galley(pos, g, pal.text);
     rect
 }
 
@@ -1309,6 +1342,7 @@ fn icon_button_sized(
     hit: f32,
     enabled: bool,
 ) -> Response {
+    let pal = palette(ui);
     let hit = Rect::from_center_size(c, vec2(hit, hit));
     let sense = if enabled {
         Sense::click()
@@ -1317,9 +1351,9 @@ fn icon_button_sized(
     };
     let r = ui.interact(hit, ui.id().with(("icon", icon as u8)), sense);
     if enabled && r.hovered() {
-        ui.painter().circle_filled(c, hit.width() / 2.0, HOVER);
+        ui.painter().circle_filled(c, hit.width() / 2.0, pal.hover);
     }
-    let color = if enabled { TEXT } else { DISABLED };
+    let color = if enabled { pal.text } else { pal.disabled };
     icon.image(color, size)
         .paint_at(ui, Rect::from_center_size(c, vec2(size, size)));
     r
@@ -1338,10 +1372,11 @@ fn play_button_sized(
     hit: f32,
     actions: &mut Vec<Action>,
 ) {
+    let pal = palette(ui);
     if s.loading() {
         egui::Spinner::new()
             .size(size)
-            .color(TEXT)
+            .color(pal.text)
             .paint_at(ui, Rect::from_center_size(c, vec2(size, size)));
         return;
     }
@@ -1369,6 +1404,7 @@ fn seek(
     scrub: &mut Option<Scrub>,
     actions: &mut Vec<Action>,
 ) {
+    let pal = palette(ui);
     let r = ui.interact(hit, ui.id().with("seek"), Sense::click_and_drag());
     let dur = s.dur.unwrap_or(0.0);
     if dur > 0.0 {
@@ -1403,8 +1439,8 @@ fn seek(
     let mut done = rail;
     done.set_right(rail.left() + rail.width() * frac);
     let round = if top { 0.0 } else { thick / 2.0 };
-    ui.painter().rect_filled(rail, round, HAIRLINE);
-    ui.painter().rect_filled(done, round, ACCENT);
+    ui.painter().rect_filled(rail, round, pal.hairline);
+    ui.painter().rect_filled(done, round, pal.accent);
     if dur > 0.0 {
         r.on_hover_cursor(egui::CursorIcon::PointingHand);
     }

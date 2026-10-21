@@ -1,8 +1,9 @@
-//! The look: one grid, three type sizes, a dark palette with one accent.
+//! The look: one grid, three type sizes, a dark and a light palette with one accent.
 //! Every edge sits on a multiple of `UNIT`; text starts `MARGIN` in from the window's sides.
 use egui::{Color32, FontFamily, FontId, Stroke, TextStyle};
 use fastframe_fonts::{LocalFont, Weight};
-use std::sync::Arc;
+use std::collections::BTreeMap;
+use std::sync::{Arc, LazyLock, OnceLock};
 
 pub const UNIT: f32 = 4.0;
 /// Left and right of everything: text, bars, the last button's glyph.
@@ -21,18 +22,90 @@ const TYPEFACE: Typeface = Typeface::Quattro;
 /// The leading face's capital height, as a share of the font size.
 pub const CAP: f32 = TYPEFACE.cap();
 
-pub const BG: Color32 = Color32::from_rgb(0x12, 0x12, 0x11);
-pub const HAIRLINE: Color32 = Color32::from_rgb(0x2a, 0x2a, 0x28);
-pub const HOVER: Color32 = Color32::from_rgb(0x1c, 0x1c, 0x1b);
-pub const SELECTED: Color32 = Color32::from_rgb(0x26, 0x26, 0x24);
-pub const TEXT: Color32 = Color32::from_rgb(0xed, 0xed, 0xeb);
-pub const SECONDARY: Color32 = Color32::from_rgb(0x8c, 0x8c, 0x88);
-pub const DISABLED: Color32 = Color32::from_rgb(0x4a, 0x4a, 0x47);
-/// What floats: round buttons and the title pill, and their edge.
-pub const SURFACE: Color32 = Color32::from_rgb(0x1e, 0x1e, 0x1d);
-pub const EDGE: Color32 = Color32::from_rgb(0x2e, 0x2e, 0x2c);
-/// Only for what is live: progress, the playing dot, the channel link.
-pub const ACCENT: Color32 = Color32::from_rgb(0xa9, 0x7b, 0xff);
+/// The colours, from `assets/themes`: one palette for dark and one for light, in the format
+/// fastframe-theme reads, so an Omarchy theme or a palette file can stand in for either.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Palette {
+    pub dark: bool,
+    pub bg: Color32,
+    pub hairline: Color32,
+    pub hover: Color32,
+    pub selected: Color32,
+    pub text: Color32,
+    pub secondary: Color32,
+    pub disabled: Color32,
+    /// What floats: round buttons, the title pill and the mini player, and their edge and shadow.
+    pub surface: Color32,
+    pub edge: Color32,
+    pub shadow: Color32,
+    /// Only for what is live: progress, the playing dot, the channel link.
+    pub accent: Color32,
+}
+
+const DARK: &str = include_str!("../assets/themes/dark.json");
+
+impl Palette {
+    pub fn dark() -> Self {
+        static OWN: LazyLock<Palette> = LazyLock::new(|| Palette::own(true, DARK));
+        *OWN
+    }
+
+    /// One of ours: every colour named in its file, so nothing is left to a default.
+    fn own(dark: bool, file: &str) -> Self {
+        #[derive(serde::Deserialize)]
+        struct File {
+            colors: BTreeMap<String, String>,
+        }
+        let file: File = serde_json::from_str(file).expect("our palette is valid JSON");
+        let mut palette = Self {
+            dark,
+            bg: Color32::PLACEHOLDER,
+            hairline: Color32::PLACEHOLDER,
+            hover: Color32::PLACEHOLDER,
+            selected: Color32::PLACEHOLDER,
+            text: Color32::PLACEHOLDER,
+            secondary: Color32::PLACEHOLDER,
+            disabled: Color32::PLACEHOLDER,
+            surface: Color32::PLACEHOLDER,
+            edge: Color32::PLACEHOLDER,
+            shadow: Color32::PLACEHOLDER,
+            accent: Color32::PLACEHOLDER,
+        };
+        for (name, value) in &file.colors {
+            let color = fastframe_theme::parse_color(value).expect("our colours are #RRGGBB");
+            assert!(palette.set(name, color), "unknown colour {name}");
+        }
+        palette
+    }
+
+    /// Sets a colour by its name in a palette file. Ours are named as fastframe-theme's,
+    /// so Omarchy and shared palettes fit; the ones we draw nothing with are taken and dropped.
+    fn set(&mut self, name: &str, color: Color32) -> bool {
+        match name {
+            "window" => self.bg = color,
+            "outline" => self.hairline = color,
+            "surface_hover" => self.hover = color,
+            "surface_active" => self.selected = color,
+            "text" => self.text = color,
+            "secondary" => self.secondary = color,
+            "dim" => self.disabled = color,
+            "surface" => self.surface = color,
+            "edge" => self.edge = color,
+            "shadow" => self.shadow = color,
+            "accent" => self.accent = color,
+            "panel" | "accent_hover" | "on_accent" | "danger" | "warning" | "overlay" => {}
+            _ => return false,
+        }
+        true
+    }
+}
+
+/// The palette the views draw with, as `apply` last set it.
+pub fn palette(ui: &egui::Ui) -> Palette {
+    ui.ctx()
+        .data(|d| d.get_temp(egui::Id::NULL))
+        .unwrap_or_else(Palette::dark)
+}
 
 #[allow(dead_code)]
 enum Typeface {
@@ -96,7 +169,7 @@ pub fn install(ctx: &egui::Context) {
             }
         }
     }
-    let rendering = fastframe_text::detect();
+    let rendering = RENDERING.get_or_init(fastframe_text::detect);
     rendering.apply_to(&mut fonts);
     ctx.set_fonts(fonts);
 
@@ -125,32 +198,48 @@ pub fn install(ctx: &egui::Context) {
         style.interaction.selectable_labels = false;
         // Views place things on the grid themselves; egui's gaps between widgets would push them off it.
         style.spacing.item_spacing = egui::vec2(2.0 * UNIT, 0.0);
+    });
+    apply(ctx, Palette::dark());
+}
+
+/// The desktop's text rendering, asked once: dark and light text are drawn differently.
+static RENDERING: OnceLock<fastframe_text::TextRendering> = OnceLock::new();
+
+/// Paints egui's own widgets in `p`, and hands `p` to the views.
+pub fn apply(ctx: &egui::Context, p: Palette) {
+    let rendering = RENDERING.get_or_init(fastframe_text::detect);
+    ctx.all_styles_mut(|style| {
         let v = &mut style.visuals;
-        *v = egui::Visuals::dark();
+        *v = if p.dark {
+            egui::Visuals::dark()
+        } else {
+            egui::Visuals::light()
+        };
         rendering.apply_to_visuals(v);
-        v.panel_fill = BG;
-        v.window_fill = BG;
-        v.extreme_bg_color = BG;
-        v.faint_bg_color = HOVER;
+        v.panel_fill = p.bg;
+        v.window_fill = p.bg;
+        v.extreme_bg_color = p.bg;
+        v.faint_bg_color = p.hover;
         v.override_text_color = None;
-        v.hyperlink_color = ACCENT;
-        v.selection.bg_fill = SELECTED;
-        v.selection.stroke = Stroke::new(1.0, TEXT);
+        v.hyperlink_color = p.accent;
+        v.selection.bg_fill = p.selected;
+        v.selection.stroke = Stroke::new(1.0, p.text);
         let w = &mut v.widgets;
-        w.noninteractive.bg_stroke = Stroke::new(1.0, HAIRLINE);
-        w.noninteractive.fg_stroke = Stroke::new(1.0, TEXT);
+        w.noninteractive.bg_stroke = Stroke::new(1.0, p.hairline);
+        w.noninteractive.fg_stroke = Stroke::new(1.0, p.text);
         for (state, fill) in [
-            (&mut w.inactive, BG),
-            (&mut w.hovered, HOVER),
-            (&mut w.active, SELECTED),
-            (&mut w.open, SELECTED),
+            (&mut w.inactive, p.bg),
+            (&mut w.hovered, p.hover),
+            (&mut w.active, p.selected),
+            (&mut w.open, p.selected),
         ] {
             state.bg_fill = fill;
             state.weak_bg_fill = fill;
             state.bg_stroke = Stroke::NONE;
-            state.fg_stroke = Stroke::new(1.0, TEXT);
+            state.fg_stroke = Stroke::new(1.0, p.text);
             state.expansion = 0.0;
         }
-        v.weak_text_color = Some(SECONDARY);
+        v.weak_text_color = Some(p.secondary);
     });
+    ctx.data_mut(|d| d.insert_temp(egui::Id::NULL, p));
 }

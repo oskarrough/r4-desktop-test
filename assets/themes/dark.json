@@ -1,0 +1,16 @@
+{
+  "base": "dark",
+  "colors": {
+    "window": "#121211",
+    "outline": "#2a2a28",
+    "surface_hover": "#1c1c1b",
+    "surface_active": "#262624",
+    "text": "#ededeb",
+    "secondary": "#8c8c88",
+    "dim": "#4a4a47",
+    "surface": "#1e1e1d",
+    "edge": "#2e2e2c",
+    "accent": "#a97bff",
+    "shadow": "#00000060"
+  }
+}
