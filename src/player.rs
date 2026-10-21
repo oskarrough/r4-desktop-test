@@ -57,6 +57,17 @@ impl Player {
         let _ = self.mpv.command("cycle", &["pause"]);
     }
 
+    /// Seconds into the current track and its length, once mpv knows both.
+    pub fn progress(&self) -> Option<(f64, f64)> {
+        let pos: f64 = self.mpv.get_property("time-pos").ok()?;
+        let dur: f64 = self.mpv.get_property("duration").ok()?;
+        Some((pos, dur))
+    }
+
+    pub fn seek(&self, secs: f64) {
+        let _ = self.mpv.command("seek", &[&secs.to_string(), "absolute"]);
+    }
+
     pub fn next(&self) {
         let _ = self.mpv.command("playlist-next", &[]);
     }
