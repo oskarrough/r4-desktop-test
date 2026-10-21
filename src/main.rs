@@ -1,8 +1,10 @@
 //! With a URL, play its audio via libmpv + yt-dlp and exit when it ends. Without one, open the channel list.
-use libmpv2::{Mpv, events::Event};
+use libmpv2::events::Event;
 
 mod channels;
 mod gui;
+mod player;
+mod tracks;
 
 fn main() {
     let Some(url) = std::env::args().nth(1) else {
@@ -21,15 +23,7 @@ fn main() {
         return;
     }
 
-    let mpv = Mpv::with_initializer(|init| {
-        init.set_option("vid", "no")?;
-        init.set_option("ytdl", "yes")?;
-        init.set_option("ytdl-format", "bestaudio/best")?;
-        init.set_option("terminal", "yes")?;
-        init.set_option("msg-level", "all=warn")?;
-        Ok(())
-    })
-    .expect("failed to create mpv");
+    let mpv = player::mpv().expect("failed to create mpv");
 
     mpv.command("loadfile", &[&url]).expect("loadfile failed");
 
