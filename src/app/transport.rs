@@ -2,7 +2,7 @@
 use super::Action;
 use super::widgets::{
     HIT, ICON, Icon, KNOB, TOP, arc, channel_image, close, face, fit, icon_button,
-    icon_button_sized, knob, put, put_top, squircle,
+    icon_button_sized, knob, put, put_top, squircle, squircle_top,
 };
 use crate::player::{Command, State};
 use crate::style::{BODY, LARGE, MARGIN, SMALL, UNIT, font, palette};
@@ -105,12 +105,15 @@ pub(super) fn dock(
         actions.push(Action::ShowNow);
     }
 
-    // The top edge between the corners is the seek line: it fills with the track and thickens to be dragged.
-    let edge = Rect::from_min_size(
-        pos2(rect.left() + round, rect.top()),
-        vec2(rect.width() - 2.0 * round, 2.0 * UNIT),
+    // The top edge is the seek line, from halfway round one corner to halfway round the other: it fills with the
+    // track and thickens to be dragged.
+    let lip = round * (1.0 - std::f32::consts::FRAC_1_SQRT_2.sqrt());
+    let edge = Rect::from_x_y_ranges(
+        rect.left() + lip..=rect.right() - lip,
+        rect.top()..=rect.top() + 2.0 * UNIT,
     );
-    seek(ui, edge, true, LINE, s, scrub, actions);
+    let (frac, live) = seek(ui, edge, s, scrub, actions);
+    edge_line(ui, rect, round, frac, if live { 2.0 * LINE } else { LINE });
 
     // The face sits as far in from the left as from the top and bottom; next mirrors it at the right.
     let cy = rect.center().y;
@@ -241,7 +244,8 @@ pub(super) fn now_playing(
     y += channel.size().y + 6.0 * UNIT;
 
     let hit = Rect::from_min_size(pos2(x, y), vec2(width, 4.0 * UNIT));
-    seek(ui, hit, false, 2.0 * LINE, s, scrub, actions);
+    let (frac, live) = seek(ui, hit, s, scrub, actions);
+    bar(ui, hit, frac, if live { 4.0 * LINE } else { 2.0 * LINE });
     y += 4.0 * UNIT + 4.0 * UNIT;
     let small = font(SMALL, Weight::Regular);
     put(
@@ -382,57 +386,67 @@ fn play_button_sized(
     }
 }
 
-/// The progress of the track, seekable. A `line` thick bar on `hit`'s top edge when `top`, else in its middle,
-/// twice as thick under the pointer. Seeks once it is let go, not on every step of a drag.
+/// The progress of the track, seekable anywhere in `hit`, left to right. How far along it is and whether the pointer
+/// is on it, for the caller to draw. Seeks once it is let go, not on every step of a drag.
 fn seek(
     ui: &mut Ui,
     hit: Rect,
-    top: bool,
-    line: f32,
     s: &State,
     scrub: &mut Option<Scrub>,
     actions: &mut Vec<Action>,
-) {
-    let pal = palette(ui);
+) -> (f32, bool) {
     let r = ui.interact(hit, ui.id().with("seek"), Sense::click_and_drag());
     let dur = s.dur.unwrap_or(0.0);
-    if dur > 0.0 {
-        if let Some(p) = r.interact_pointer_pos() {
-            let frac = ((p.x - hit.left()) / hit.width()).clamp(0.0, 1.0) as f64;
-            *scrub = Some(Scrub {
-                to: frac * dur,
-                dragging: true,
-                at: Instant::now(),
-            });
-        }
-        if (r.drag_stopped() || r.clicked())
-            && let Some(sc) = scrub
-        {
-            sc.dragging = false;
-            actions.push(Action::Send(Command::Seek(sc.to)));
-        }
+    if dur <= 0.0 {
+        return (0.0, false);
     }
-    let frac = if dur > 0.0 {
-        (shown(s, scrub) / dur).clamp(0.0, 1.0) as f32
-    } else {
-        0.0
-    };
-    let live = dur > 0.0 && (r.hovered() || r.dragged());
-    let thick = if live { 2.0 * line } else { line };
-    let y = if top {
-        hit.top()
-    } else {
-        hit.center().y - thick / 2.0
-    };
-    let rail = Rect::from_min_size(pos2(hit.left(), y), vec2(hit.width(), thick));
+    if let Some(p) = r.interact_pointer_pos() {
+        let frac = ((p.x - hit.left()) / hit.width()).clamp(0.0, 1.0) as f64;
+        *scrub = Some(Scrub {
+            to: frac * dur,
+            dragging: true,
+            at: Instant::now(),
+        });
+    }
+    if (r.drag_stopped() || r.clicked())
+        && let Some(sc) = scrub
+    {
+        sc.dragging = false;
+        actions.push(Action::Send(Command::Seek(sc.to)));
+    }
+    let frac = (shown(s, scrub) / dur).clamp(0.0, 1.0) as f32;
+    (frac, r.hovered() || r.dragged())
+}
+
+/// The dock's seek line: its top edge, curving down into both corners, filled `frac` of the way across.
+fn edge_line(ui: &Ui, rect: Rect, round: f32, frac: f32, thick: f32) {
+    let pal = palette(ui);
+    let path = squircle_top(rect.shrink(thick / 2.0), round - thick / 2.0);
+    let (first, last) = (path[0], path[path.len() - 1]);
+    let to = first.x + (last.x - first.x) * frac;
+    let mut done: Vec<Pos2> = path.iter().copied().take_while(|p| p.x < to).collect();
+    if let Some(i) = path.iter().position(|p| p.x >= to)
+        && i > 0
+    {
+        let (a, b) = (path[i - 1], path[i]);
+        done.push(a.lerp(b, (to - a.x) / (b.x - a.x)));
+    }
+    ui.painter()
+        .line(path, egui::Stroke::new(thick, pal.hairline));
+    if done.len() > 1 {
+        ui.painter()
+            .line(done, egui::Stroke::new(thick, pal.accent));
+    }
+}
+
+/// The now-playing view's seek bar: a rounded rail across the middle of `hit`, filled `frac` of the way.
+fn bar(ui: &Ui, hit: Rect, frac: f32, thick: f32) {
+    let pal = palette(ui);
+    let rail = Rect::from_center_size(hit.center(), vec2(hit.width(), thick));
     let mut done = rail;
     done.set_right(rail.left() + rail.width() * frac);
-    let round = if top { 0.0 } else { thick / 2.0 };
-    ui.painter().rect_filled(rail, round, pal.hairline);
-    ui.painter().rect_filled(done, round, pal.accent);
-    if dur > 0.0 {
-        r.on_hover_cursor(egui::CursorIcon::PointingHand);
-    }
+    ui.painter().rect_filled(rail, thick / 2.0, pal.hairline);
+    ui.painter().rect_filled(done, thick / 2.0, pal.accent);
 }
 
 /// Seconds as m:ss, or h:mm:ss for long mixes.

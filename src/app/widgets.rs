@@ -74,6 +74,28 @@ fn squircle_outline(rect: Rect, r: f32) -> Vec<Pos2> {
     points
 }
 
+/// The squircle's top edge left to right, from halfway round one top corner to halfway round the other.
+pub(super) fn squircle_top(rect: Rect, r: f32) -> Vec<Pos2> {
+    let e = 2.0 / SQUIRCLE_POWER;
+    let corner = |c: Pos2, sx: f32, a: f32| {
+        c + vec2(
+            sx * r * a.cos().max(0.0).powf(e),
+            -r * a.sin().max(0.0).powf(e),
+        )
+    };
+    let (left, right) = (
+        pos2(rect.left() + r, rect.top() + r),
+        pos2(rect.right() - r, rect.top() + r),
+    );
+    let quarter = std::f32::consts::FRAC_PI_4;
+    let mut points: Vec<Pos2> = (0..=8)
+        .map(|k| corner(left, -1.0, quarter * (1.0 + k as f32 / 8.0)))
+        .chain((0..=8).map(|k| corner(right, 1.0, quarter * (2.0 - k as f32 / 8.0))))
+        .collect();
+    points.dedup_by(|a, b| a.distance(*b) < 0.01);
+    points
+}
+
 /// A stroke clockwise from twelve o'clock, `frac` of the way round.
 pub(super) fn arc(ui: &Ui, c: Pos2, radius: f32, frac: f32, stroke: egui::Stroke) {
     let steps = (64.0 * frac).ceil() as usize;
