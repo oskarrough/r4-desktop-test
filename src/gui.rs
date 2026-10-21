@@ -102,6 +102,7 @@ pub fn run() -> eframe::Result {
                 channels: None,
                 tracks: HashMap::new(),
                 open: None,
+                info: false,
                 now: false,
                 player: Player::spawn(&[], move || ctx.request_repaint()),
                 media: {
@@ -137,6 +138,7 @@ pub fn run() -> eframe::Result {
                 app.channels = Some(Ok(d.channels));
                 app.player.state = d.state;
                 app.open = d.open.then_some(open);
+                app.info = d.info;
                 app.now = d.now;
                 app.scroll.reveal = Some(Reveal::Jump);
                 if d.volume {
@@ -158,6 +160,8 @@ struct App {
     tracks: HashMap<String, Tracks>,
     /// The channel being looked at.
     open: Option<Open>,
+    /// The open channel's details cover its tracklist.
+    info: bool,
     /// The now-playing view covers everything else.
     now: bool,
     player: Player,
@@ -247,6 +251,8 @@ impl Volume {
 enum Action {
     Open(String, String),
     Back,
+    /// Show or hide the open channel's details.
+    Info,
     ShowNow,
     /// Play this track of the open channel.
     Play(usize),
@@ -310,6 +316,9 @@ impl eframe::App for App {
                 });
             egui::CentralPanel::no_frame().frame(flat).show(ui, |ui| {
                 match &self.open {
+                    Some(o) if self.info => {
+                        channel_info(ui, o, find(&self.channels, &o.slug), actions)
+                    }
                     Some(o) => {
                         let image = avatar(&self.channels, &o.slug);
                         tracklist(
@@ -331,6 +340,9 @@ impl eframe::App for App {
         } else {
             egui::CentralPanel::no_frame().frame(flat).show(ui, |ui| {
                 match &self.open {
+                    Some(o) if self.info => {
+                        channel_info(ui, o, find(&self.channels, &o.slug), actions)
+                    }
                     Some(o) => {
                         let image = avatar(&self.channels, &o.slug);
                         tracklist(
@@ -430,6 +442,7 @@ impl App {
                 key(Key::PageUp, Action::Cursor(-8));
                 key(Key::PageDown, Action::Cursor(8));
                 key(Key::Enter, Action::Choose);
+                key(Key::I, Action::Info);
             }
             if i.pointer.delta() != egui::Vec2::ZERO {
                 self.keyed = false;
@@ -517,6 +530,7 @@ impl App {
                 }
             }
             Action::Choose if !self.now => match &self.open {
+                Some(o) if self.info => open_page(ctx, &o.slug),
                 Some(_) => self.play(self.scroll.cursor),
                 None => {
                     if let Some(Ok(list)) = &self.channels
@@ -547,16 +561,20 @@ impl App {
                 self.scroll.reveal =
                     (self.player.state.queue.as_deref() == Some(&slug)).then_some(Reveal::Jump);
                 self.open = Some(Open { slug, name });
+                self.info = false;
                 self.now = false;
             }
             Action::Back => {
                 self.scrolling.stop();
                 if self.now {
                     self.now = false;
+                } else if self.info {
+                    self.info = false;
                 } else {
                     self.open = None;
                 }
             }
+            Action::Info => self.info = self.open.is_some() && !self.info,
             Action::ShowNow => self.now = self.player.state.queue.is_some(),
             Action::Play(index) => {
                 self.scroll.cursor = index;
@@ -988,14 +1006,17 @@ fn channel_list(
     });
 }
 
-/// The channel's avatar id, if it has one.
-fn avatar<'a>(channels: &'a Option<Result<Vec<Channel>, String>>, slug: &str) -> Option<&'a str> {
+/// The channel with this slug, once the list is in.
+fn find<'a>(channels: &'a Option<Result<Vec<Channel>, String>>, slug: &str) -> Option<&'a Channel> {
     let Some(Ok(list)) = channels else {
         return None;
     };
-    list.iter()
-        .find(|c| c.slug == slug)
-        .and_then(|c| c.image.as_deref())
+    list.iter().find(|c| c.slug == slug)
+}
+
+/// The channel's avatar id, if it has one.
+fn avatar<'a>(channels: &'a Option<Result<Vec<Channel>, String>>, slug: &str) -> Option<&'a str> {
+    find(channels, slug).and_then(|c| c.image.as_deref())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1037,8 +1058,156 @@ fn tracklist(
     chrome(ui, rect, &open.name, image, back, actions);
 }
 
+/// The channel's page on radio4000.com, in the browser.
+fn open_page(ctx: &egui::Context, slug: &str) {
+    ctx.open_url(egui::OpenUrl::new_tab(format!(
+        "https://{}",
+        channels::page(slug)
+    )));
+}
+
+/// The open channel's details, over its tracklist: its face, name and figures, its own words, and a link to its
+/// page, centred in the room between the top band and the mini player, scrolling when the words run long.
+fn channel_info(ui: &mut Ui, open: &Open, channel: Option<&Channel>, actions: &mut Vec<Action>) {
+    let pal = palette(ui);
+    let rect = ui.max_rect();
+    let width = rect.width() - 2.0 * MARGIN;
+    let side = 20.0 * UNIT;
+    let name = fit(
+        ui,
+        &open.name,
+        font(LARGE, Weight::SemiBold),
+        pal.text,
+        width,
+    );
+    let stats: Vec<_> = channel
+        .map(|c| c.stats())
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(figure, label)| {
+            (
+                fit(ui, &figure, font(BODY, Weight::SemiBold), pal.text, width),
+                fit(
+                    ui,
+                    label,
+                    font(SMALL, Weight::Regular),
+                    pal.secondary,
+                    width,
+                ),
+            )
+        })
+        .collect();
+    // As many figures as fit side by side, each column its widest line and a gap; the later ones go first.
+    let column = |n: usize| (width / n as f32).min(24.0 * UNIT);
+    let fits = |n: usize| {
+        stats[..n]
+            .iter()
+            .all(|(f, l)| ink_width(f).max(ink_width(l)) + 2.0 * UNIT <= column(n))
+    };
+    let shown = (1..=stats.len()).rev().find(|&n| fits(n)).unwrap_or(1);
+    let stats = &stats[..shown.min(stats.len())];
+    let body = channel
+        .and_then(|c| c.description.as_deref())
+        .map(str::trim)
+        .filter(|d| !d.is_empty())
+        .map(|d| {
+            let mut job = LayoutJob::simple(
+                d.to_owned(),
+                font(BODY, Weight::Regular),
+                pal.text,
+                width.min(80.0 * UNIT),
+            );
+            job.halign = egui::Align::Center;
+            ui.painter().layout_job(job)
+        });
+    let page = channels::page(&open.slug);
+    let link = fit(ui, &page, font(BODY, Weight::Regular), pal.accent, width);
+
+    // Each step down is a gap on the grid.
+    let gap = 6.0 * UNIT;
+    let figures = if stats.is_empty() {
+        0.0
+    } else {
+        8.0 * UNIT + gap
+    };
+    let words = body.as_ref().map_or(0.0, |b| b.size().y + gap);
+    let height = side + 4.0 * UNIT + name.size().y + gap + figures + words + link.size().y;
+    let room = DOCK + 6.0 * UNIT;
+
+    egui::ScrollArea::vertical()
+        .auto_shrink(false)
+        .show(ui, |ui| {
+            let inner = ui.max_rect();
+            let free = rect.height() - TOP - room;
+            let mut y = inner.top() + TOP + ((free - height) / 2.0).max(0.0);
+            y = (y / UNIT).round() * UNIT;
+            ui.set_height(y - inner.top() + height + room);
+            let cx = inner.center().x.round();
+
+            face(
+                ui,
+                Rect::from_min_size(pos2(cx - side / 2.0, y), vec2(side, side)),
+                channel.and_then(|c| c.image.as_deref()),
+                &open.name,
+            );
+            y += side + 4.0 * UNIT;
+            put_top(ui, name.clone(), cx - ink_width(&name) / 2.0, y);
+            y += name.size().y + gap;
+
+            if !stats.is_empty() {
+                // Columns sharing the room evenly, at most 96 wide, the group centred.
+                let col = column(stats.len());
+                let left = cx - col * stats.len() as f32 / 2.0;
+                for (i, (figure, label)) in stats.iter().enumerate() {
+                    let mid = left + col * (i as f32 + 0.5);
+                    put(
+                        ui,
+                        figure.clone(),
+                        mid - ink_width(figure) / 2.0,
+                        y + 2.0 * UNIT,
+                    );
+                    put(
+                        ui,
+                        label.clone(),
+                        mid - ink_width(label) / 2.0,
+                        y + 6.0 * UNIT,
+                    );
+                }
+                y += figures;
+            }
+
+            if let Some(b) = &body {
+                ui.painter().galley(pos2(cx, y), b.clone(), pal.text);
+                y += words;
+            }
+
+            let at = put_top(ui, link.clone(), cx - ink_width(&link) / 2.0, y);
+            let r = ui
+                .interact(at, ui.id().with("page"), Sense::click())
+                .on_hover_cursor(egui::CursorIcon::PointingHand);
+            if r.hovered() {
+                let under = (at.bottom() - 1.0).round();
+                ui.painter()
+                    .hline(at.x_range(), under, egui::Stroke::new(1.0, pal.accent));
+            }
+            if r.clicked() {
+                open_page(ui.ctx(), &open.slug);
+            }
+        });
+
+    fade(ui, rect);
+    back(
+        ui,
+        pos2(
+            rect.left() + 2.0 * UNIT + KNOB / 2.0,
+            rect.top() + 2.0 * UNIT + KNOB / 2.0,
+        ),
+        actions,
+    );
+}
+
 /// What floats over the top of a list: a fade the rows scroll under, a round back button,
-/// and the title in a pill with the channel's avatar.
+/// and the title in a pill with the channel's avatar, which opens the channel's details.
 fn chrome(
     ui: &mut Ui,
     rect: Rect,
@@ -1047,6 +1216,26 @@ fn chrome(
     back_button: bool,
     actions: &mut Vec<Action>,
 ) {
+    fade(ui, rect);
+    let side = 2.0 * UNIT + KNOB / 2.0;
+    let cy = rect.top() + side;
+    if back_button {
+        back(ui, pos2(rect.left() + side, cy), actions);
+    }
+    let r = pill(
+        ui,
+        pos2(rect.center().x, cy),
+        title,
+        image,
+        rect.width() - 4.0 * side,
+    );
+    if r.is_some_and(|r| r.on_hover_text("About this channel (i)").clicked()) {
+        actions.push(Action::Info);
+    }
+}
+
+/// The band at the top that what's below scrolls under, fading to the background.
+fn fade(ui: &Ui, rect: Rect) {
     let pal = palette(ui);
     let band = Rect::from_x_y_ranges(rect.x_range(), rect.top()..=rect.top() + TOP);
     let mut mesh = egui::Mesh::default();
@@ -1057,19 +1246,6 @@ fn chrome(
     mesh.add_triangle(0, 1, 2);
     mesh.add_triangle(1, 3, 2);
     ui.painter().add(mesh);
-
-    let side = 2.0 * UNIT + KNOB / 2.0;
-    let cy = rect.top() + side;
-    if back_button {
-        back(ui, pos2(rect.left() + side, cy), actions);
-    }
-    pill(
-        ui,
-        pos2(rect.center().x, cy),
-        title,
-        image,
-        rect.width() - 4.0 * side,
-    );
 }
 
 /// A round button that floats over what's under it.
@@ -1100,11 +1276,11 @@ fn back(ui: &mut Ui, c: Pos2, actions: &mut Vec<Action>) {
     }
 }
 
-/// The title in a pill centred on `c`, led by the avatar when there is one.
-fn pill(ui: &mut Ui, c: Pos2, title: &str, image: Option<&str>, max: f32) {
+/// The title in a pill centred on `c`, led by the avatar when there is one. Pressable, like the knobs.
+fn pill(ui: &mut Ui, c: Pos2, title: &str, image: Option<&str>, max: f32) -> Option<Response> {
     let pal = palette(ui);
     if title.is_empty() {
-        return;
+        return None;
     }
     let lead = if image.is_some() {
         UNIT + AVATAR + 2.0 * UNIT
@@ -1123,10 +1299,16 @@ fn pill(ui: &mut Ui, c: Pos2, title: &str, image: Option<&str>, max: f32) {
     let left = (c.x - (lead + ink_width(&g) + trail) / 2.0).round();
     let width = (left + lead + ink_width(&g)).ceil() + trail - left;
     let rect = Rect::from_min_size(pos2(left, c.y - KNOB / 2.0), vec2(width, KNOB));
+    let r = ui.interact(rect, ui.id().with("pill"), Sense::click());
+    let fill = if r.hovered() || r.has_focus() {
+        pal.selected
+    } else {
+        pal.surface
+    };
     ui.painter().rect(
         rect,
         KNOB / 2.0,
-        pal.surface,
+        fill,
         egui::Stroke::new(1.0, pal.edge),
         egui::StrokeKind::Inside,
     );
@@ -1135,6 +1317,7 @@ fn pill(ui: &mut Ui, c: Pos2, title: &str, image: Option<&str>, max: f32) {
         face(ui, at, image, title);
     }
     put(ui, g, left + lead, c.y);
+    Some(r)
 }
 
 /// A round speaker opposite back: click to mute. Scrolling anywhere on the view, or up and down, turns the volume

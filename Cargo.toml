@@ -5,7 +5,7 @@ edition = "2024"
 
 [dependencies]
 libmpv2 = { version = "6.0.0", default-features = false }
-eframe = { version = "0.36.2", default-features = false, features = ["glow", "wayland", "x11"] }
+eframe = { version = "0.36.2", default-features = false, features = ["glow", "wayland", "x11", "links"] }
 egui = "0.36.2"
 fastframe-fonts = { git = "https://github.com/crmne/fastframe", tag = "v0.14.0" }
 fastframe-text = { git = "https://github.com/crmne/fastframe", tag = "v0.14.0" }
