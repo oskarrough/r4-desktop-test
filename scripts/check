@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+# The repo's checks: fmt, clippy and tests. A pass is recorded against the exact worktree content (tracked and
+# untracked files, Cargo.lock included) and the toolchain, so running it again on the same state prints the earlier
+# pass instead of rebuilding. Any edit, rebase or toolchain change makes a new state that runs everything.
+# Every run appends one line per step to target/checks.jsonl: time, state, step, result, seconds.
+#
+#   scripts/check           run, or show the pass for this exact state
+#   scripts/check --force   run anyway
+set -euo pipefail
+
+root=$(git rev-parse --show-toplevel)
+cd "$root"
+mkdir -p target/checks
+
+index=$(mktemp)
+trap 'rm -f "$index"' EXIT
+cp "$(git rev-parse --git-path index)" "$index"
+tree=$(GIT_INDEX_FILE=$index git add -A && GIT_INDEX_FILE=$index git write-tree)
+state=$( (echo "$tree"; rustc -V; cargo clippy -V) | sha256sum | cut -c1-12)
+pass="target/checks/$state"
+
+if [[ ${1:-} != --force && -f $pass ]]; then
+	echo "check: passed $(cat "$pass") for this exact state ($state); nothing changed since"
+	exit 0
+fi
+
+step() {
+	local name=$1 start ok=true
+	shift
+	start=$(date +%s.%N)
+	"$@" || ok=false
+	printf '{"at":"%s","state":"%s","step":"%s","ok":%s,"secs":%.1f}\n' \
+		"$(date -Is)" "$state" "$name" "$ok" "$(awk "BEGIN { print $(date +%s.%N) - $start }")" >>target/checks.jsonl
+	$ok || { echo "check: $name failed ($state)" >&2; exit 1; }
+}
+
+step fmt cargo fmt --check
+step clippy cargo clippy --quiet --all-targets -- -D warnings
+step test cargo test --quiet
+date -Is >"$pass"
+echo "check: passed ($state)"

@@ -74,6 +74,17 @@ pub fn app_dir() -> Option<std::path::PathBuf> {
     Some(dirs.config.join("desktop"))
 }
 
+/// `RADIO4000_INSTANCE=<name>` runs a copy beside the usual one, with its own single-instance slot and MPRIS name, so
+/// test runs from several checkouts don't hand their launch to each other. `scripts/try` sets it, and its own XDG folders.
+pub fn instance() -> Option<String> {
+    let name = std::env::var("RADIO4000_INSTANCE").ok()?;
+    let name: String = name
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+        .collect();
+    (!name.is_empty()).then_some(name)
+}
+
 /// Logs to stderr and, unless it's a demo, to `radio4000.log` in [`app_dir`], made fresh each run.
 fn logging() {
     let version = option_env!("RADIO4000_VERSION").unwrap_or("dev");

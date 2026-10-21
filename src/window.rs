@@ -245,6 +245,10 @@ pub fn claim(demo: bool) -> Option<(fastframe_instance::Guard, Arc<Summons>)> {
     let slot = Slot::new(APP_ID);
     // The demo runs beside the real player, for screenshots.
     let slot = if demo { slot.scoped("demo") } else { slot };
+    let slot = match crate::instance() {
+        Some(name) => slot.scoped(&name),
+        None => slot,
+    };
     let summons = Arc::new(Summons::default());
     let handler = summons.clone();
     match slot.claim("show", move |request| {
