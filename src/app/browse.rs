@@ -50,6 +50,7 @@ pub(super) fn channel_list(
     open: Option<&str>,
     playing: Option<&str>,
     opens: bool,
+    search: bool,
     scroll: &mut ListScroll,
     keyed: bool,
     actions: &mut Vec<Action>,
@@ -67,6 +68,10 @@ pub(super) fn channel_list(
         channel_row(ui, c, selected, playing, opens, actions);
     });
     fade(ui, rect);
+    // While a channel slides over, its own search button stands in for this one.
+    if !search {
+        return;
+    }
     let side = 2.0 * UNIT + KNOB / 2.0;
     let c = pos2(rect.left() + side, rect.top() + side);
     let r = knob(ui, c, "search");
@@ -277,7 +282,7 @@ pub(super) fn tracklist(
     image: Option<&str>,
     tracks: Option<Result<&[Track], &str>>,
     s: &State,
-    back: bool,
+    back: Option<f32>,
     scroll: &mut ListScroll,
     keyed: bool,
     actions: &mut Vec<Action>,

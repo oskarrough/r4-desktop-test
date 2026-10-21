@@ -28,6 +28,8 @@ use std::time::{Duration, Instant};
 const WIDE: f32 = 560.0;
 /// How far the view underneath drifts aside meanwhile, as a share of the width.
 const DRIFT: f32 = 0.3;
+/// How much it fades meanwhile.
+const DIM: f32 = 0.4;
 
 pub fn run() -> eframe::Result {
     let demo = crate::demo::from_env();
@@ -205,6 +207,7 @@ impl eframe::App for App {
                             open,
                             playing,
                             false,
+                            true,
                             &mut self.channel_scroll,
                             self.keyboard_cursor && self.nav.open_channel.is_none(),
                             actions,
@@ -221,7 +224,7 @@ impl eframe::App for App {
                             state,
                             self.nav.show_channel_info,
                             self.nav.info_transition,
-                            false,
+                            None,
                             &mut self.track_scroll,
                             self.keyboard_cursor,
                             actions,
@@ -258,12 +261,15 @@ impl eframe::App for App {
                                     ui.disable();
                                     ui.set_opacity(opacity);
                                 }
+                                // Receding as the channel covers it.
+                                ui.multiply_opacity(1.0 - DIM * shown);
                                 channel_list(
                                     ui,
                                     self.library.channels(),
                                     None,
                                     playing,
                                     true,
+                                    self.nav.channel_transition.is_none(),
                                     &mut self.channel_scroll,
                                     self.keyboard_cursor && live,
                                     acts,
@@ -305,7 +311,7 @@ impl eframe::App for App {
                                     state,
                                     self.nav.show_channel_info,
                                     self.nav.info_transition,
-                                    true,
+                                    Some(shown),
                                     &mut self.track_scroll,
                                     self.keyboard_cursor && live,
                                     acts,
@@ -385,7 +391,7 @@ fn channel_pane(
     state: &player::State,
     show_info: bool,
     transition: Option<Slide>,
-    back: bool,
+    back: Option<f32>,
     scroll: &mut ListScroll,
     keyed: bool,
     actions: &mut Vec<Action>,

@@ -1,7 +1,7 @@
 //! Shared text, artwork, headers, and drawing primitives.
 use super::Action;
 use super::browse::SearchTarget;
-use super::navigation::ChannelRef;
+use super::navigation::{ChannelRef, snap};
 use crate::channels;
 use crate::style::{BODY, CAP, SMALL, UNIT, font, palette};
 use egui::text::{LayoutJob, TextWrapping};
@@ -92,42 +92,81 @@ pub(super) fn arc(ui: &Ui, c: Pos2, radius: f32, frac: f32, stroke: egui::Stroke
 
 /// What floats over the top of a list: a fade, back and search buttons,
 /// and the title in a pill with the channel's avatar, which opens the channel's details.
+/// `back` is how far the channel has slid over the channel list, when it does: the buttons hold still meanwhile,
+/// search glides aside, back shows in the room it leaves, then the title drifts in; leaving runs it in reverse.
 pub(super) fn chrome(
     ui: &mut Ui,
     rect: Rect,
     open: &ChannelRef,
     image: Option<&str>,
-    back_button: bool,
+    back_button: Option<f32>,
     actions: &mut Vec<Action>,
 ) {
     fade(ui, rect);
-    let side = 2.0 * UNIT + KNOB / 2.0;
-    let cy = rect.top() + side;
-    if back_button {
-        back(ui, pos2(rect.left() + side, cy), actions);
+    let shown = back_button.unwrap_or(1.0);
+    let rect = rect.translate(-snap(ui, vec2((1.0 - shown) * rect.width(), 0.0)));
+    // Over the whole pane, not just the part slid in so far.
+    ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
+        if back_button.is_some() {
+            ui.set_clip_rect(rect);
+        }
+        let side = 2.0 * UNIT + KNOB / 2.0;
+        let cy = rect.top() + side;
+        let home = rect.left() + side;
+        let room = if back_button.is_some() {
+            KNOB + UNIT
+        } else {
+            0.0
+        };
+        if back_button.is_some() {
+            faded(ui, stage(shown, 0.15, 0.75), |ui| {
+                back(ui, pos2(home, cy), actions)
+            });
+        }
+        let c = pos2(home + snap(ui, vec2(shown * room, 0.0)).x, cy);
+        let pal = palette(ui);
+        let search = knob(ui, c, "search");
+        Icon::Search
+            .image(pal.text, ICON)
+            .paint_at(ui, Rect::from_center_size(c, vec2(ICON, ICON)));
+        if search.on_hover_text("Search tracks (/)").clicked() {
+            actions.push(Action::Search(SearchTarget::Tracks(open.clone())));
+        }
+        let left = home + room + KNOB / 2.0 + 2.0 * UNIT;
+        let right = rect.right() - 2.0 * UNIT;
+        let arrived = stage(shown, 0.35, 1.0);
+        let drift = snap(ui, vec2((1.0 - arrived) * 4.0 * UNIT, 0.0)).x;
+        let r = faded(ui, arrived, |ui| {
+            pill(
+                ui,
+                pos2((left + right) / 2.0 + drift, cy),
+                &open.name,
+                image,
+                (right - left).max(0.0),
+            )
+        })
+        .flatten();
+        if r.is_some_and(|r| r.on_hover_text("About this channel (i)").clicked()) {
+            actions.push(Action::Info);
+        }
+    });
+}
+
+/// How far along from `a` to `b` a transition at `t` is, from 0 to 1, so parts of a view can follow one another.
+fn stage(t: f32, a: f32, b: f32) -> f32 {
+    ((t - a) / (b - a)).clamp(0.0, 1.0)
+}
+
+/// Draws with `f` at this opacity; nothing at all, nor anything to click, while fully faded.
+fn faded<R>(ui: &mut Ui, opacity: f32, f: impl FnOnce(&mut Ui) -> R) -> Option<R> {
+    if opacity <= 0.0 {
+        return None;
     }
-    let search_x = rect.left() + side + if back_button { KNOB + UNIT } else { 0.0 };
-    let c = pos2(search_x, cy);
-    let pal = palette(ui);
-    let search = knob(ui, c, "search");
-    Icon::Search
-        .image(pal.text, ICON)
-        .paint_at(ui, Rect::from_center_size(c, vec2(ICON, ICON)));
-    if search.on_hover_text("Search tracks (/)").clicked() {
-        actions.push(Action::Search(SearchTarget::Tracks(open.clone())));
-    }
-    let left = search_x + KNOB / 2.0 + 2.0 * UNIT;
-    let right = rect.right() - 2.0 * UNIT;
-    let r = pill(
-        ui,
-        pos2((left + right) / 2.0, cy),
-        &open.name,
-        image,
-        (right - left).max(0.0),
-    );
-    if r.is_some_and(|r| r.on_hover_text("About this channel (i)").clicked()) {
-        actions.push(Action::Info);
-    }
+    let inner = ui.scope_builder(egui::UiBuilder::new().max_rect(ui.max_rect()), |ui| {
+        ui.multiply_opacity(opacity);
+        f(ui)
+    });
+    Some(inner.inner)
 }
 
 /// The band at the top that what's below scrolls under, fading to the background.
