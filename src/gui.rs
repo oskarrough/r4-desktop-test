@@ -530,12 +530,7 @@ impl App {
                 }
             }
             Action::Choose if !self.now => match &self.open {
-                Some(o) if self.info => {
-                    ctx.open_url(egui::OpenUrl::new_tab(format!(
-                        "https://{}",
-                        channels::page(&o.slug)
-                    )));
-                }
+                Some(o) if self.info => open_page(ctx, &o.slug),
                 Some(_) => self.play(self.scroll.cursor),
                 None => {
                     if let Some(Ok(list)) = &self.channels
@@ -1063,6 +1058,14 @@ fn tracklist(
     chrome(ui, rect, &open.name, image, back, actions);
 }
 
+/// The channel's page on radio4000.com, in the browser.
+fn open_page(ctx: &egui::Context, slug: &str) {
+    ctx.open_url(egui::OpenUrl::new_tab(format!(
+        "https://{}",
+        channels::page(slug)
+    )));
+}
+
 /// The open channel's details, over its tracklist: its face, name and figures, its own words, and a link to its
 /// page, centred in the room between the top band and the mini player, scrolling when the words run long.
 fn channel_info(ui: &mut Ui, open: &Open, channel: Option<&Channel>, actions: &mut Vec<Action>) {
@@ -1188,8 +1191,7 @@ fn channel_info(ui: &mut Ui, open: &Open, channel: Option<&Channel>, actions: &m
                     .hline(at.x_range(), under, egui::Stroke::new(1.0, pal.accent));
             }
             if r.clicked() {
-                ui.ctx()
-                    .open_url(egui::OpenUrl::new_tab(format!("https://{page}")));
+                open_page(ui.ctx(), &open.slug);
             }
         });
 
