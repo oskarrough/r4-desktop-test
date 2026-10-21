@@ -4,13 +4,19 @@ Native Radio4000 player. Right now just a playback spike: play the audio of one 
 
 ## Install
 
-There are no versioned releases yet. Every push to main rebuilds the [`latest`](https://github.com/oskarrough/r4-desktop-test/releases/tag/latest) release:
+Linux and macOS (Apple Silicon):
 
-- [Linux](https://github.com/oskarrough/r4-desktop-test/releases/download/latest/radio4000-linux-x86_64.tar.gz)
-- [macOS (Apple Silicon)](https://github.com/oskarrough/r4-desktop-test/releases/download/latest/radio4000-macos-arm64.tar.gz)
-- [Windows](https://github.com/oskarrough/r4-desktop-test/releases/download/latest/radio4000-windows-x86_64.zip)
+```sh
+curl -fsSL https://raw.githubusercontent.com/oskarrough/r4-desktop-test/main/install.sh | sh
+```
 
-Unpack and run `radio4000 <url>`. Needs yt-dlp, plus mpv on Linux and macOS (see below).
+Windows:
+
+```powershell
+irm https://raw.githubusercontent.com/oskarrough/r4-desktop-test/main/install.ps1 | iex
+```
+
+Run the same line again to update.
 
 ## Running from source
 
@@ -26,7 +32,7 @@ Needs libmpv (API 2.x) to link against and `yt-dlp` on `PATH`.
 
 Install the libmpv dev package and yt-dlp.
 
-- Fedora: `sudo dnf install mpv-devel yt-dlp` (mpv lives in RPM Fusion)
+- Fedora: `sudo dnf install mpv-devel yt-dlp`
 - Debian/Ubuntu: `sudo apt install libmpv-dev yt-dlp`
 - Arch: `sudo pacman -S mpv yt-dlp`
 
