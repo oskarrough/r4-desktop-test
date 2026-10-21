@@ -2,13 +2,9 @@
 use crate::channels::Channel;
 use std::path::PathBuf;
 
-/// `$XDG_CACHE_HOME/radio4000/channels.json`, falling back to `%LOCALAPPDATA%` and then `~/.cache`.
+/// `channels.json` in the app's one folder, beside the log.
 fn path() -> Option<PathBuf> {
-    let dir = std::env::var_os("XDG_CACHE_HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("LOCALAPPDATA").map(PathBuf::from))
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")))?;
-    Some(dir.join("radio4000").join("channels.json"))
+    Some(crate::app_dir()?.join("channels.json"))
 }
 
 /// The last list we got, or `None` on a first run or an unreadable cache.
@@ -35,5 +31,16 @@ pub fn save(channels: &[Channel]) {
     let tmp = path.with_extension("json.tmp");
     if std::fs::write(&tmp, body).is_ok() {
         let _ = std::fs::rename(&tmp, &path);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn cache_and_log_share_one_folder() {
+        let dir = crate::app_dir().unwrap();
+        assert_eq!(super::path().unwrap().parent(), Some(dir.as_path()));
+        #[cfg(target_os = "linux")]
+        assert!(dir.ends_with("radio4000/desktop"), "{dir:?}");
     }
 }

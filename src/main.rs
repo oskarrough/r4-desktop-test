@@ -66,16 +66,21 @@ fn main() {
     }
 }
 
-/// Logs to stderr and, unless it's a demo, to a file made fresh each run: `~/.local/state/radio4000/radio4000.log` on Linux.
+/// Everything the app keeps on disk lives here: `~/.config/radio4000/desktop/` on Linux. `None` without a home folder.
+pub fn app_dir() -> Option<std::path::PathBuf> {
+    let dirs = fastframe_dirs::Dirs::platform("org", "radio4000", "radio4000")?;
+    Some(dirs.config.join("desktop"))
+}
+
+/// Logs to stderr and, unless it's a demo, to `radio4000.log` in [`app_dir`], made fresh each run.
 fn logging() {
     let version = option_env!("RADIO4000_VERSION").unwrap_or("dev");
     let mut logging =
         fastframe_log::Logging::new("radio4000", version).filter("warn,radio4000=info");
-    let dirs = fastframe_dirs::Dirs::platform("org", "radio4000", "radio4000");
-    if let Some(dirs) = dirs.filter(|_| demo::from_env().is_none()) {
+    if let Some(dir) = app_dir().filter(|_| demo::from_env().is_none()) {
         logging = logging
-            .file(dirs.state.join("radio4000.log"))
-            .panic_log(dirs.state.join("panic.log"));
+            .file(dir.join("radio4000.log"))
+            .panic_log(dir.join("panic.log"));
     }
     let _ = logging.init();
 }
