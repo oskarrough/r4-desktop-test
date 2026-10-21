@@ -56,10 +56,16 @@ fastframe_icons::icons! {
 }
 
 pub fn run() -> eframe::Result {
+    let demo = crate::demo::from_env();
+    let Some((_running, summons)) = crate::window::claim(demo.is_some()) else {
+        return Ok(());
+    };
+    let memory = crate::window::Memory::load(demo.is_some());
+    let viewport = egui::ViewportBuilder::default()
+        .with_inner_size([280.0, 420.0])
+        .with_min_inner_size([180.0, 200.0]);
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_inner_size([280.0, 420.0])
-            .with_min_inner_size([180.0, 200.0]),
+        viewport: memory.geometry.apply(viewport),
         ..Default::default()
     };
     eframe::run_native(
@@ -69,9 +75,9 @@ pub fn run() -> eframe::Result {
             crate::style::install(&cc.egui_ctx);
             egui_extras::install_image_loaders(&cc.egui_ctx);
             fastframe_icons::install::<Icon>(&cc.egui_ctx);
+            summons.attach(&cc.egui_ctx);
 
             let (tx, rx) = mpsc::channel();
-            let demo = crate::demo::from_env();
             if demo.is_none() {
                 let ctx = cc.egui_ctx.clone();
                 std::thread::spawn(move || {
@@ -106,6 +112,8 @@ pub fn run() -> eframe::Result {
                 actions: Vec::new(),
                 demo: demo.is_some(),
                 theme: crate::theme::Theme::new(&cc.egui_ctx, demo.is_some()),
+                memory,
+                summons,
             };
             if let Some(d) = demo {
                 let (_, rx) = mpsc::channel();
@@ -161,6 +169,9 @@ struct App {
     /// Showing the demo: the player's state stays as the demo set it.
     demo: bool,
     theme: crate::theme::Theme,
+    memory: crate::window::Memory,
+    /// Another launch asking for the window.
+    summons: Arc<crate::window::Summons>,
 }
 
 struct Open {
@@ -241,6 +252,12 @@ enum Action {
 }
 
 impl eframe::App for App {
+    // Runs minimized too, where `ui` doesn't.
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.memory.remember(ctx);
+        self.summons.answer(ctx);
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.theme.update(ui.ctx());
         let pal = palette(ui);

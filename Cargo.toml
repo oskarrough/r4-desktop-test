@@ -23,6 +23,10 @@ fastframe-dirs = { git = "https://github.com/crmne/fastframe", tag = "v0.14.0" }
 log = "0.4"
 # mpv_request_log_messages, which libmpv2 doesn't wrap.
 libmpv2-sys = "4.0.1"
+fastframe-shell = { git = "https://github.com/crmne/fastframe", tag = "v0.14.0" }
+fastframe-instance = { git = "https://github.com/crmne/fastframe", tag = "v0.14.0" }
+fastframe-file = { git = "https://github.com/crmne/fastframe", tag = "v0.14.0" }
+
 
 [target.'cfg(target_os = "linux")'.dependencies]
 zbus = { version = "5", default-features = false, features = ["blocking-api", "async-io"] }
