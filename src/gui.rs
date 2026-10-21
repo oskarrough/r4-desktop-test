@@ -1,5 +1,6 @@
 //! The window shown when the app opens without a URL: R4 channels, newest activity first.
 use crate::channels::{self, Channel};
+use crate::player::Player;
 use crate::tracks::{self, Track};
 use std::sync::mpsc;
 
@@ -25,6 +26,7 @@ pub fn run() -> eframe::Result {
                 rx,
                 channels: None,
                 open: None,
+                player: None,
             }))
         }),
     )
@@ -34,11 +36,14 @@ struct App {
     rx: mpsc::Receiver<Result<Vec<Channel>, String>>,
     channels: Option<Result<Vec<Channel>, String>>,
     open: Option<Open>,
+    /// Created on the first play, so browsing works even without libmpv.
+    player: Option<Result<Player, String>>,
 }
 
 /// The channel being looked at, with its tracks once they arrive.
 struct Open {
     name: String,
+    slug: String,
     rx: mpsc::Receiver<Result<Vec<Track>, String>>,
     tracks: Option<Result<Vec<Track>, String>>,
 }
@@ -53,6 +58,7 @@ impl Open {
         });
         Open {
             name: c.name.clone(),
+            slug: c.slug.clone(),
             rx,
             tracks: None,
         }
@@ -71,12 +77,39 @@ impl eframe::App for App {
         }
         let mut back = false;
         let mut clicked = None;
+        let mut play = None;
+        let player = match &self.player {
+            Some(Ok(p)) => Some(p),
+            _ => None,
+        };
         egui::CentralPanel::default().show(ui, |ui| {
             if let Some(open) = &self.open {
                 ui.horizontal(|ui| {
                     back = ui.button("< Channels").clicked();
                     ui.heading(&open.name);
                 });
+                if let Some(Err(e)) = &self.player {
+                    ui.label(format!("Could not start playback: {e}"));
+                }
+                let current = player
+                    .filter(|p| p.queue.as_deref() == Some(&open.slug))
+                    .and_then(|p| p.current());
+                if let (Some(p), Some(_)) = (player, current) {
+                    ui.horizontal(|ui| {
+                        if ui.button("Prev").clicked() {
+                            p.prev();
+                        }
+                        if ui
+                            .button(if p.paused() { "Play" } else { "Pause" })
+                            .clicked()
+                        {
+                            p.toggle_pause();
+                        }
+                        if ui.button("Next").clicked() {
+                            p.next();
+                        }
+                    });
+                }
                 match &open.tracks {
                     None => {
                         ui.spinner();
@@ -86,8 +119,11 @@ impl eframe::App for App {
                     }
                     Some(Ok(list)) => {
                         egui::ScrollArea::vertical().show(ui, |ui| {
-                            for t in list {
-                                ui.label(t.title.as_deref().unwrap_or(&t.url));
+                            for (i, t) in list.iter().enumerate() {
+                                let title = t.title.as_deref().unwrap_or(&t.url);
+                                if ui.selectable_label(current == Some(i), title).clicked() {
+                                    play = Some(i);
+                                }
                             }
                         });
                     }
@@ -119,6 +155,21 @@ impl eframe::App for App {
                 }
             }
         });
+        if let Some(i) = play
+            && let Some(open) = &self.open
+            && let Some(Ok(list)) = &open.tracks
+        {
+            let player = self.player.get_or_insert_with(Player::new);
+            if let Ok(p) = player {
+                let urls: Vec<&str> = list.iter().map(|t| t.url.as_str()).collect();
+                p.play(&open.slug, &urls, i);
+            }
+        }
+        // mpv moves on by itself; look again so the highlight follows it.
+        if self.player.is_some() {
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_millis(500));
+        }
         if back {
             self.open = None;
         }
