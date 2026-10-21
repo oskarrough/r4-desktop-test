@@ -57,6 +57,7 @@ fastframe_icons::icons! {
         Next => "skip-forward-filled",
         Speaker => lucide "volume-2",
         Muted => lucide "volume-x",
+        Search => lucide "search",
     }
 }
 
@@ -111,6 +112,7 @@ pub fn run() -> eframe::Result {
                 side: None,
                 now: false,
                 up: None,
+                search: None,
                 player: Player::spawn(&[], move || ctx.request_repaint()),
                 media: {
                     let ctx = cc.egui_ctx.clone();
@@ -147,6 +149,7 @@ pub fn run() -> eframe::Result {
                 app.open = d.open.then_some(open);
                 app.info = d.info;
                 app.now = d.now;
+                app.search = d.search.then(Search::default);
                 app.scroll.reveal = Some(Reveal::Jump);
                 if d.volume {
                     app.volume = Some(Volume {
@@ -177,6 +180,8 @@ struct App {
     now: bool,
     /// Now playing sliding up over everything, or back down.
     up: Option<Slide>,
+    /// The search panel covers the lists, under the now-playing view.
+    search: Option<Search>,
     player: Player,
     /// Media keys in, and what's on out to the system's now-playing widget.
     media: NowPlaying,
@@ -209,6 +214,13 @@ struct Open {
 struct Tracks {
     rx: mpsc::Receiver<Result<Vec<Track>, String>>,
     list: Option<Result<Vec<Track>, String>>,
+}
+
+/// What's typed in the search panel, and its list's scroll and cursor.
+#[derive(Default)]
+struct Search {
+    query: String,
+    scroll: Scroll,
 }
 
 /// Where the seek bar points while it is dragged, and after, until mpv has caught up.
@@ -307,6 +319,8 @@ enum Action {
     /// Show or hide the open channel's details.
     Info,
     ShowNow,
+    /// Open the search panel.
+    Search,
     /// Play this track of the open channel.
     Play(usize),
     Toggle,
@@ -343,7 +357,12 @@ impl eframe::App for App {
         let face_of_playing = playing.and_then(|q| avatar(&self.channels, q));
         // What's under now playing is drawn only while it slides.
         if !self.now || self.up.is_some() {
-            if wide {
+            if let Some(search) = &mut self.search {
+                egui::CentralPanel::no_frame().frame(flat).show(ui, |ui| {
+                    search_panel(ui, search, &self.channels, playing, actions);
+                    dock(ui, state, face_of_playing, &mut self.scrub, actions);
+                });
+            } else if wide {
                 let open = self.open.as_ref().map(|o| o.slug.as_str());
                 egui::Panel::left("channels")
                     .frame(flat)
@@ -549,20 +568,30 @@ impl App {
     }
 
     fn keys(&mut self, ctx: &egui::Context) {
+        let typing = self.search.is_some() && !self.now;
+        let overview = !self.now
+            && self.search.is_none()
+            && (self.open.is_none() || ctx.content_rect().width() >= WIDE);
         ctx.input_mut(|i| {
             let mut key = |k, a| {
                 if i.consume_key(Modifiers::NONE, k) {
                     self.actions.push(a);
                 }
             };
-            key(Key::Space, Action::Toggle);
-            key(Key::N, Action::Send(Command::Next));
-            key(Key::P, Action::Send(Command::Prev));
-            key(Key::ArrowLeft, Action::Send(Command::SeekBy(-10.0)));
-            key(Key::ArrowRight, Action::Send(Command::SeekBy(10.0)));
+            // Typing in the search field keeps its letters, space, backspace and arrows.
+            if !typing {
+                key(Key::Space, Action::Toggle);
+                key(Key::N, Action::Send(Command::Next));
+                key(Key::P, Action::Send(Command::Prev));
+                key(Key::ArrowLeft, Action::Send(Command::SeekBy(-10.0)));
+                key(Key::ArrowRight, Action::Send(Command::SeekBy(10.0)));
+                key(Key::Backspace, Action::Back);
+                key(Key::M, Action::ToggleMute);
+            }
+            if overview {
+                key(Key::Slash, Action::Search);
+            }
             key(Key::Escape, Action::Back);
-            key(Key::Backspace, Action::Back);
-            key(Key::M, Action::ToggleMute);
             // Up and down are the iPod's wheel: volume, while the now-playing view is up.
             if self.now {
                 key(Key::ArrowUp, Action::Volume(STEP));
@@ -573,7 +602,9 @@ impl App {
                 key(Key::PageUp, Action::Cursor(-8));
                 key(Key::PageDown, Action::Cursor(8));
                 key(Key::Enter, Action::Choose);
-                key(Key::I, Action::Info);
+                if !typing {
+                    key(Key::I, Action::Info);
+                }
             }
             if i.pointer.delta() != egui::Vec2::ZERO {
                 self.keyed = false;
@@ -634,18 +665,29 @@ impl App {
     fn act(&mut self, ctx: &egui::Context, a: Action) {
         match a {
             Action::Cursor(by) => {
-                // The first press only shows where the cursor is.
-                let by = if self.keyed { by } else { 0 };
+                // The first press only shows where the cursor is; search always shows it.
+                let by = if self.keyed || self.search.is_some() {
+                    by
+                } else {
+                    0
+                };
                 self.keyed = true;
-                let (len, scroll) = match &self.open {
-                    Some(o) => (
+                let (len, scroll) = match (&mut self.search, &self.open) {
+                    (Some(search), _) => (
+                        match &self.channels {
+                            Some(Ok(l)) => matching(&search.query, l).len(),
+                            _ => 0,
+                        },
+                        &mut search.scroll,
+                    ),
+                    (None, Some(o)) => (
                         match self.tracks.get(&o.slug).and_then(|t| t.list.as_ref()) {
                             Some(Ok(l)) => l.len(),
                             _ => 0,
                         },
                         &mut self.scroll,
                     ),
-                    None => (
+                    (None, None) => (
                         match &self.channels {
                             Some(Ok(l)) => l.len(),
                             _ => 0,
@@ -658,6 +700,14 @@ impl App {
                     self.scrolling.stop();
                     scroll.cursor = scroll.cursor.saturating_add_signed(by).min(len - 1);
                     scroll.reveal = Some(Reveal::Show(scroll.cursor));
+                }
+            }
+            Action::Choose if !self.now && self.search.is_some() => {
+                if let (Some(search), Some(Ok(list))) = (&self.search, &self.channels)
+                    && let Some(&i) = matching(&search.query, list).get(search.scroll.cursor)
+                {
+                    let a = Action::Open(list[i].slug.clone(), list[i].name.clone());
+                    self.act(ctx, a);
                 }
             }
             Action::Choose if !self.now => match &self.open {
@@ -697,11 +747,14 @@ impl App {
                 self.open = Some(Open { slug, name });
                 self.info = false;
                 self.show_now(false);
+                self.search = None;
             }
             Action::Back => {
                 self.scrolling.stop();
                 if self.now {
                     self.show_now(false);
+                } else if self.search.is_some() {
+                    self.search = None;
                 } else if self.info {
                     self.info = false;
                 } else if self.open.is_some() {
@@ -711,6 +764,10 @@ impl App {
             }
             Action::Info => self.info = self.open.is_some() && !self.info,
             Action::ShowNow => self.show_now(self.player.state.queue.is_some()),
+            Action::Search => {
+                self.scrolling.stop();
+                self.search = Some(Search::default());
+            }
             Action::Play(index) => {
                 self.scroll.cursor = index;
                 self.play(index);
@@ -1129,23 +1186,160 @@ fn channel_list(
         Some(Err(e)) => return note(ui, &format!("Could not load channels: {e}")),
         Some(Ok(list)) => list,
     };
+    let rect = ui.max_rect();
     let cursor = keyed.then_some(scroll.cursor);
-    rows(ui, list.len(), 2.0 * UNIT, None, Some(scroll), |ui, i| {
+    rows(ui, list.len(), TOP, None, Some(scroll), |ui, i| {
         let c = &list[i];
         let selected = open == Some(c.slug.as_str()) || cursor == Some(i);
-        if row(
-            ui,
-            &c.name,
-            Some(c.image.as_deref()),
-            selected,
-            playing == Some(&c.slug),
-            opens,
-        )
-        .clicked()
-        {
-            actions.push(Action::Open(c.slug.clone(), c.name.clone()));
-        }
+        channel_row(ui, c, selected, playing, opens, actions);
     });
+    fade(ui, rect);
+    let side = 2.0 * UNIT + KNOB / 2.0;
+    let c = pos2(rect.left() + side, rect.top() + side);
+    let r = knob(ui, c, "search");
+    let pal = palette(ui);
+    Icon::Search
+        .image(pal.text, ICON)
+        .paint_at(ui, Rect::from_center_size(c, vec2(ICON, ICON)));
+    if r.on_hover_text("Search (/)").clicked() {
+        actions.push(Action::Search);
+    }
+}
+
+fn channel_row(
+    ui: &mut Ui,
+    c: &Channel,
+    selected: bool,
+    playing: Option<&str>,
+    opens: bool,
+    actions: &mut Vec<Action>,
+) {
+    if row(
+        ui,
+        &c.name,
+        Some(c.image.as_deref()),
+        selected,
+        playing == Some(&c.slug),
+        opens,
+    )
+    .clicked()
+    {
+        actions.push(Action::Open(c.slug.clone(), c.name.clone()));
+    }
+}
+
+/// The search panel: a back button and the field floating at the top, the channels that match under them.
+/// The cursor always shows, so return opens the first match straight away.
+fn search_panel(
+    ui: &mut Ui,
+    search: &mut Search,
+    channels: &Option<Result<Vec<Channel>, String>>,
+    playing: Option<&str>,
+    actions: &mut Vec<Action>,
+) {
+    let pal = palette(ui);
+    let rect = ui.max_rect();
+    match channels {
+        None => note(ui, "Loading…"),
+        Some(Err(e)) => note(ui, &format!("Could not load channels: {e}")),
+        Some(Ok(list)) => {
+            let hits = matching(&search.query, list);
+            if hits.is_empty() {
+                note(ui, "No channels match.");
+            } else {
+                search.scroll.cursor = search.scroll.cursor.min(hits.len() - 1);
+                let cursor = search.scroll.cursor;
+                rows(
+                    ui,
+                    hits.len(),
+                    TOP,
+                    None,
+                    Some(&mut search.scroll),
+                    |ui, i| {
+                        channel_row(ui, &list[hits[i]], cursor == i, playing, true, actions);
+                    },
+                );
+            }
+        }
+    }
+
+    fade(ui, rect);
+    let side = 2.0 * UNIT + KNOB / 2.0;
+    let cy = rect.top() + side;
+    back(ui, pos2(rect.left() + side, cy), actions);
+    let field = Rect::from_x_y_ranges(
+        rect.left() + 2.0 * side..=rect.right() - 2.0 * UNIT,
+        cy - KNOB / 2.0..=cy + KNOB / 2.0,
+    );
+    ui.painter().rect(
+        field,
+        KNOB / 2.0,
+        pal.surface,
+        egui::Stroke::new(1.0, pal.edge),
+        egui::StrokeKind::Inside,
+    );
+    let icon = pos2(field.left() + 2.0 * UNIT + ICON / 2.0, cy);
+    Icon::Search
+        .image(pal.secondary, ICON)
+        .paint_at(ui, Rect::from_center_size(icon, vec2(ICON, ICON)));
+    let text = Rect::from_x_y_ranges(
+        icon.x + ICON / 2.0 + 2.0 * UNIT..=field.right() - 3.0 * UNIT,
+        field.y_range(),
+    );
+    let edit = egui::TextEdit::singleline(&mut search.query)
+        .frame(egui::Frame::NONE)
+        .margin(0.0)
+        .vertical_align(egui::Align::Center)
+        .font(font(BODY, Weight::Regular))
+        .text_color(pal.text)
+        .hint_text(egui::RichText::new("Search channels").color(pal.secondary))
+        .desired_width(text.width());
+    let r = ui.put(text, edit);
+    // The field is the panel's only input: it keeps the keyboard.
+    if !r.has_focus() {
+        r.request_focus();
+    }
+    // The list was drawn for the old query; draw it again for the new one.
+    if r.changed() {
+        search.scroll.cursor = 0;
+        search.scroll.reveal = Some(Reveal::Show(0));
+        ui.ctx().request_repaint();
+    }
+}
+
+/// The channels whose name or slug holds every word typed, best first: those starting with the whole query, then those
+/// where every word starts a word, then the rest. Within each, the list's own order, latest track first.
+/// No query finds every channel.
+fn matching(query: &str, list: &[Channel]) -> Vec<usize> {
+    let query = query.to_lowercase();
+    let words: Vec<&str> = query.split_whitespace().collect();
+    let mut hits: Vec<(u8, usize)> = list
+        .iter()
+        .enumerate()
+        .filter_map(|(i, c)| {
+            let name = c.name.to_lowercase();
+            let slug = c.slug.to_lowercase();
+            if !words.iter().all(|w| name.contains(w) || slug.contains(w)) {
+                return None;
+            }
+            let whole = words.join(" ");
+            let starts = |w: &str| {
+                name.split(|ch: char| !ch.is_alphanumeric())
+                    .chain(slug.split(|ch: char| !ch.is_alphanumeric()))
+                    .any(|part| part.starts_with(w))
+            };
+            let rank = if name.starts_with(&whole) || slug.starts_with(&whole) {
+                0
+            } else if words.iter().all(|w| starts(w)) {
+                1
+            } else {
+                2
+            };
+            Some((rank, i))
+        })
+        .collect();
+    hits.sort_by_key(|&(rank, _)| rank);
+    hits.into_iter().map(|(_, i)| i).collect()
 }
 
 /// The channel with this slug, once the list is in.
@@ -1928,5 +2122,43 @@ mod tests {
     fn clock_reads_like_a_player() {
         assert_eq!(super::clock(65.9), "1:05");
         assert_eq!(super::clock(3725.0), "1:02:05");
+    }
+
+    #[test]
+    fn search_finds_every_word_and_ranks_starts_first() {
+        let channel = |slug: &str, name: &str| crate::channels::Channel {
+            slug: slug.into(),
+            name: name.into(),
+            description: None,
+            image: None,
+            created_at: None,
+            latest_track_at: None,
+            track_count: None,
+        };
+        let list = [
+            channel("tele", "Teleradio"),
+            channel("fans", "Fans of radio"),
+            channel("belleville", "Radio Belleville"),
+            channel("oskar", "Radio Oskar"),
+            channel("sempre", "SEMPRELIGADO FM"),
+            channel("radiohead-fans", "Fans"),
+        ];
+        let found = |q| -> Vec<&str> {
+            super::matching(q, &list)
+                .into_iter()
+                .map(|i| list[i].slug.as_str())
+                .collect()
+        };
+        assert_eq!(found("").len(), list.len());
+        // Whole-query starts first, then word starts, then anywhere, each in the list's order.
+        assert_eq!(
+            found("radio"),
+            ["belleville", "oskar", "radiohead-fans", "fans", "tele"]
+        );
+        assert_eq!(found("osk RAD"), ["oskar"]);
+        assert_eq!(found("ville"), ["belleville"]);
+        assert_eq!(found("liga"), ["sempre"]);
+        assert_eq!(found("bel"), ["belleville"]);
+        assert!(found("jazz").is_empty());
     }
 }
