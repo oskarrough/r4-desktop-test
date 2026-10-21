@@ -42,6 +42,9 @@ pub enum Command {
     Seek(f64),
     /// By this many seconds, back when negative.
     SeekBy(f64),
+    /// Set the volume, 0 to 100, and unmute.
+    Volume(f64),
+    ToggleMute,
 }
 
 /// What the player is doing, as of the thread's last look.
@@ -57,6 +60,9 @@ pub struct State {
     pub pos: f64,
     /// Unknown while yt-dlp resolves the track.
     pub dur: Option<f64>,
+    /// 0 to 100.
+    pub volume: f64,
+    pub muted: bool,
     pub error: Option<String>,
 }
 
@@ -177,6 +183,13 @@ impl Engine {
             Command::SeekBy(secs) => {
                 let _ = mpv.command("seek", &[&secs.to_string(), "relative"]);
             }
+            Command::Volume(v) => {
+                let _ = mpv.set_property("volume", v.clamp(0.0, 100.0));
+                let _ = mpv.set_property("mute", false);
+            }
+            Command::ToggleMute => {
+                let _ = mpv.command("cycle", &["mute"]);
+            }
         }
     }
 
@@ -197,6 +210,8 @@ impl Engine {
         s.paused = mpv.get_property("pause").unwrap_or(false);
         s.pos = mpv.get_property("time-pos").unwrap_or(0.0);
         s.dur = mpv.get_property("duration").ok();
+        s.volume = mpv.get_property("volume").unwrap_or(100.0);
+        s.muted = mpv.get_property("mute").unwrap_or(false);
         *s != before
     }
 }

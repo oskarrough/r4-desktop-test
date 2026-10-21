@@ -22,6 +22,11 @@ const ROW: f32 = 8.0 * UNIT;
 const HEADER: f32 = 10.0 * UNIT;
 /// The transport along the bottom, its progress line included.
 const BAR: f32 = 14.0 * UNIT;
+/// How long the volume meter stays up after a change, and how long it then takes to fade.
+const METER: Duration = Duration::from_millis(1200);
+const FADE: Duration = Duration::from_millis(300);
+/// Volume per arrow press; a notch of the wheel moves about as much.
+const STEP: f64 = 5.0;
 /// The progress line on the transport's top edge, thicker under the pointer.
 const LINE: f32 = 2.0;
 /// Transport icons, and the square each one answers clicks in.
@@ -37,6 +42,8 @@ fastframe_icons::icons! {
         Pause => "pause-filled",
         Prev => "skip-back-filled",
         Next => "skip-forward-filled",
+        Speaker => lucide "volume-2",
+        Muted => lucide "volume-x",
     }
 }
 
@@ -73,6 +80,7 @@ pub fn run() -> eframe::Result {
                 now: false,
                 player: Player::spawn(&[], move || ctx.request_repaint()),
                 scrub: None,
+                volume: None,
                 reveal: false,
                 actions: Vec::new(),
                 demo: demo.is_some(),
@@ -95,6 +103,12 @@ pub fn run() -> eframe::Result {
                 app.open = d.open.then_some(open);
                 app.now = d.now;
                 app.reveal = true;
+                if d.volume {
+                    app.volume = Some(Volume {
+                        to: app.player.state.volume,
+                        at: Instant::now() + Duration::from_secs(3600),
+                    });
+                }
             }
             Ok(Box::new(app))
         }),
@@ -112,6 +126,8 @@ struct App {
     now: bool,
     player: Player,
     scrub: Option<Scrub>,
+    /// The volume last asked for, shown on the meter until it fades.
+    volume: Option<Volume>,
     /// Scroll the playing track into view on the next frame.
     reveal: bool,
     actions: Vec<Action>,
@@ -136,6 +152,21 @@ struct Scrub {
     at: Instant,
 }
 
+/// A change of volume, ahead of mpv reporting it.
+#[derive(Clone, Copy)]
+struct Volume {
+    to: f64,
+    at: Instant,
+}
+
+impl Volume {
+    /// How visible the meter is: fully for `METER`, then fading out over `FADE`.
+    fn opacity(&self) -> f32 {
+        let t = self.at.elapsed().saturating_sub(METER);
+        1.0 - (t.as_secs_f32() / FADE.as_secs_f32()).min(1.0)
+    }
+}
+
 /// What the views asked for this frame, done once they are drawn.
 enum Action {
     Open(String, String),
@@ -144,6 +175,9 @@ enum Action {
     /// Play this track of the open channel.
     Play(usize),
     Toggle,
+    /// Up or down by this much.
+    Volume(f64),
+    ToggleMute,
     Send(Command),
 }
 
@@ -166,7 +200,7 @@ impl eframe::App for App {
         }
         if self.now {
             egui::CentralPanel::no_frame().frame(flat).show(ui, |ui| {
-                now_playing(ui, state, &mut self.scrub, actions);
+                now_playing(ui, state, &mut self.scrub, self.volume, actions);
             });
         } else if wide {
             let open = self.open.as_ref().map(|o| o.slug.as_str());
@@ -234,6 +268,11 @@ impl App {
         {
             self.scrub = None;
         }
+        if let Some(v) = &self.volume
+            && v.opacity() <= 0.0
+        {
+            self.volume = None;
+        }
     }
 
     fn keys(&mut self, ctx: &egui::Context) {
@@ -250,6 +289,12 @@ impl App {
             key(Key::ArrowRight, Action::Send(Command::SeekBy(10.0)));
             key(Key::Escape, Action::Back);
             key(Key::Backspace, Action::Back);
+            key(Key::M, Action::ToggleMute);
+            // Up and down are the iPod's wheel: volume, while the now-playing view is up.
+            if self.now {
+                key(Key::ArrowUp, Action::Volume(STEP));
+                key(Key::ArrowDown, Action::Volume(-STEP));
+            }
             if i.pointer.button_pressed(PointerButton::Extra1) {
                 self.actions.push(Action::Back);
             }
@@ -278,6 +323,25 @@ impl App {
             // Space with nothing loaded starts the open channel from the top.
             Action::Toggle if self.player.state.queue.is_none() => self.play(0),
             Action::Toggle => self.player.send(Command::Toggle),
+            Action::Volume(by) => {
+                let from = self.volume.map_or(self.player.state.volume, |v| v.to);
+                let to = (from + by).clamp(0.0, 100.0);
+                self.player.send(Command::Volume(to));
+                self.volume = Some(Volume {
+                    to,
+                    at: Instant::now(),
+                });
+                if self.demo {
+                    self.player.state.volume = to;
+                    self.player.state.muted = false;
+                }
+            }
+            Action::ToggleMute => {
+                self.player.send(Command::ToggleMute);
+                if self.demo {
+                    self.player.state.muted = !self.player.state.muted;
+                }
+            }
             Action::Send(c) => self.player.send(c),
         }
     }
@@ -383,8 +447,15 @@ fn transport(ui: &mut Ui, s: &State, scrub: &mut Option<Scrub>, actions: &mut Ve
 
 /// The now-playing view, laid out like Apple's: title and channel at the margin, the seek bar with its times,
 /// then previous, play and next, the whole group centred in the window.
-fn now_playing(ui: &mut Ui, s: &State, scrub: &mut Option<Scrub>, actions: &mut Vec<Action>) {
-    header(ui, "Now playing", true, None, actions);
+fn now_playing(
+    ui: &mut Ui,
+    s: &State,
+    scrub: &mut Option<Scrub>,
+    volume: Option<Volume>,
+    actions: &mut Vec<Action>,
+) {
+    let top = header(ui, "Now playing", true, None, actions);
+    speaker(ui, top, s, volume, actions);
     let area = ui.available_rect_before_wrap();
     let x = area.left() + MARGIN;
     let width = area.width() - 2.0 * MARGIN;
@@ -496,7 +567,13 @@ fn tracklist(
 }
 
 /// The bar along the top: a back chevron, the title centred, and what's playing at the right, as on an iPod.
-fn header(ui: &mut Ui, title: &str, back: bool, s: Option<&State>, actions: &mut Vec<Action>) {
+fn header(
+    ui: &mut Ui,
+    title: &str,
+    back: bool,
+    s: Option<&State>,
+    actions: &mut Vec<Action>,
+) -> Rect {
     let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), HEADER), Sense::hover());
     let p = ui.painter();
     p.rect_filled(
@@ -544,6 +621,72 @@ fn header(ui: &mut Ui, title: &str, back: bool, s: Option<&State>, actions: &mut
             actions.push(Action::ShowNow);
         }
     }
+    rect
+}
+
+/// The speaker at the header's right, opposite back: click to mute. Scrolling anywhere on the view, or up and down,
+/// turns the volume like the Watch's crown, and the header's hairline fills to show it, then fades.
+fn speaker(
+    ui: &mut Ui,
+    header: Rect,
+    s: &State,
+    volume: Option<Volume>,
+    actions: &mut Vec<Action>,
+) {
+    let cy = header.top() + (HEADER - 1.0) / 2.0;
+    // Both speakers end at x 23 of their 24-unit box, so the body stays put as the waves turn to a cross;
+    // the box ends at the margin so the stroke's soft edge does too.
+    let right = header.right() - MARGIN;
+    let icon_rect = Rect::from_min_max(
+        pos2(right - ICON, cy - ICON / 2.0),
+        pos2(right, cy + ICON / 2.0),
+    );
+    let hit = Rect::from_center_size(icon_rect.center(), vec2(HIT, HIT));
+    let r = ui.interact(hit, ui.id().with("speaker"), Sense::click());
+    let (icon, tip) = if s.muted {
+        (Icon::Muted, "Unmute (m)")
+    } else {
+        (Icon::Speaker, "Mute (m)")
+    };
+    let color = if r.hovered() { ACCENT } else { TEXT };
+    icon.image(color, ICON).paint_at(ui, icon_rect);
+    if r.on_hover_text(tip).clicked() {
+        actions.push(Action::ToggleMute);
+    }
+
+    let view = header.union(ui.available_rect_before_wrap());
+    let by: f64 = ui.input(|i| {
+        i.raw
+            .events
+            .iter()
+            .map(|e| match e {
+                egui::Event::MouseWheel { unit, delta, .. } => {
+                    let y = f64::from(delta.y);
+                    match unit {
+                        egui::MouseWheelUnit::Line => y * STEP,
+                        egui::MouseWheelUnit::Point => y / 8.0,
+                        egui::MouseWheelUnit::Page => y * 4.0 * STEP,
+                    }
+                }
+                _ => 0.0,
+            })
+            .sum()
+    });
+    if by != 0.0 && ui.rect_contains_pointer(view) {
+        actions.push(Action::Volume(by));
+    }
+
+    let Some(v) = volume else { return };
+    let fade = v.opacity();
+    let level = if s.muted { 0.0 } else { (v.to / 100.0) as f32 };
+    let meter = Rect::from_x_y_ranges(header.x_range(), header.bottom() - 2.0..=header.bottom());
+    let mut done = meter;
+    done.set_right(meter.left() + meter.width() * level);
+    ui.painter()
+        .rect_filled(meter, 0.0, HAIRLINE.gamma_multiply(fade));
+    ui.painter()
+        .rect_filled(done, 0.0, TEXT.gamma_multiply(fade));
+    ui.ctx().request_repaint();
 }
 
 /// One row of a list: the name at the margin, then a playing dot and, for rows that open something, a chevron.
@@ -667,6 +810,7 @@ fn half(icon: Icon, size: f32) -> f32 {
         Icon::Play => 8.5,
         Icon::Pause => 8.0,
         Icon::Prev | Icon::Next => 10.0,
+        Icon::Speaker | Icon::Muted => 11.0,
     };
     units / 24.0 * size
 }
