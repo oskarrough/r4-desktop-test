@@ -292,8 +292,9 @@ impl eframe::App for App {
                             egui::UiBuilder::new().max_rect(at).id_salt("tracks"),
                             |ui| {
                                 ui.shrink_clip_rect(rect);
+                                // Always, as the channel list may still be drawn under it on the slide's last frame.
+                                ui.painter().rect_filled(at, 0.0, pal.bg);
                                 if shown < 1.0 {
-                                    ui.painter().rect_filled(at, 0.0, pal.bg);
                                     ui.painter().vline(
                                         at.left(),
                                         at.y_range(),
