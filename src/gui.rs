@@ -31,6 +31,10 @@ const DOCK: f32 = 12.0 * UNIT;
 /// The mini player's corners: superellipses this large, softer than a circle's quarter.
 const SQUIRCLE: f32 = 6.0 * UNIT;
 const SQUIRCLE_POWER: f32 = 4.0;
+/// How long a view takes to slide over the one under it, or back off it.
+const SLIDE: Duration = Duration::from_millis(280);
+/// How far the view underneath drifts aside meanwhile, as a share of the width.
+const DRIFT: f32 = 0.3;
 /// How long the volume meter stays up after a change, and how long it then takes to fade.
 const METER: Duration = Duration::from_millis(1200);
 const FADE: Duration = Duration::from_millis(300);
@@ -103,7 +107,10 @@ pub fn run() -> eframe::Result {
                 tracks: HashMap::new(),
                 open: None,
                 info: false,
+                left: None,
+                side: None,
                 now: false,
+                up: None,
                 player: Player::spawn(&[], move || ctx.request_repaint()),
                 media: {
                     let ctx = cc.egui_ctx.clone();
@@ -162,8 +169,14 @@ struct App {
     open: Option<Open>,
     /// The open channel's details cover its tracklist.
     info: bool,
+    /// The channel slid away from, drawn until its tracks are off screen.
+    left: Option<Open>,
+    /// A channel's tracks sliding sideways over the channels, in a small window.
+    side: Option<Slide>,
     /// The now-playing view covers everything else.
     now: bool,
+    /// Now playing sliding up over everything, or back down.
+    up: Option<Slide>,
     player: Player,
     /// Media keys in, and what's on out to the system's now-playing widget.
     media: NowPlaying,
@@ -232,6 +245,46 @@ struct Glide {
     at: Instant,
 }
 
+/// A view sliding over the one under it (`over`), or back off it.
+#[derive(Clone, Copy)]
+struct Slide {
+    at: Instant,
+    over: bool,
+}
+
+impl Slide {
+    /// Turning back halfway picks up from where the view is, rather than jumping to an end.
+    fn start(over: bool, running: Option<Slide>) -> Self {
+        let from = running.map_or(if over { 0.0 } else { 1.0 }, |s| s.shown());
+        let t = 1.0 - (1.0 - if over { from } else { 1.0 - from }).cbrt();
+        Slide {
+            at: Instant::now() - SLIDE.mul_f32(t),
+            over,
+        }
+    }
+
+    /// How much of the view on top is in, from 0 to 1.
+    fn shown(&self) -> f32 {
+        let e = ease(self.at.elapsed().as_secs_f32() / SLIDE.as_secs_f32());
+        if self.over { e } else { 1.0 - e }
+    }
+
+    fn done(&self) -> bool {
+        self.at.elapsed() >= SLIDE
+    }
+}
+
+/// A sliding view moves in whole pixels, so its text stays crisp.
+fn snap(ui: &Ui, v: egui::Vec2) -> egui::Vec2 {
+    let ppp = ui.ctx().pixels_per_point();
+    (v * ppp).round() / ppp
+}
+
+/// Quick off the mark, settling at the end.
+fn ease(t: f32) -> f32 {
+    1.0 - (1.0 - t.clamp(0.0, 1.0)).powi(3)
+}
+
 /// A change of volume, ahead of mpv reporting it.
 #[derive(Clone, Copy)]
 struct Volume {
@@ -288,90 +341,168 @@ impl eframe::App for App {
 
         let flat = egui::Frame::NONE.fill(pal.bg);
         let face_of_playing = playing.and_then(|q| avatar(&self.channels, q));
-        if self.now {
-            egui::CentralPanel::no_frame().frame(flat).show(ui, |ui| {
-                let image = state
-                    .queue
-                    .as_deref()
-                    .and_then(|q| avatar(&self.channels, q));
-                now_playing(ui, state, image, &mut self.scrub, self.volume, actions);
-            });
-        } else if wide {
-            let open = self.open.as_ref().map(|o| o.slug.as_str());
-            egui::Panel::left("channels")
-                .frame(flat)
-                .resizable(true)
-                .default_size(240.0)
-                .show(ui, |ui| {
-                    channel_list(
-                        ui,
-                        &self.channels,
-                        open,
-                        playing,
-                        false,
-                        &mut self.channel_scroll,
-                        self.keyed && self.open.is_none(),
-                        actions,
-                    );
-                });
-            egui::CentralPanel::no_frame().frame(flat).show(ui, |ui| {
-                match &self.open {
-                    Some(o) if self.info => {
-                        channel_info(ui, o, find(&self.channels, &o.slug), actions)
-                    }
-                    Some(o) => {
-                        let image = avatar(&self.channels, &o.slug);
-                        tracklist(
-                            ui,
-                            o,
-                            image,
-                            &self.tracks,
-                            state,
-                            false,
-                            &mut self.scroll,
-                            self.keyed,
-                            actions,
-                        )
-                    }
-                    None => note(ui, "Pick a channel."),
-                }
-                dock(ui, state, face_of_playing, &mut self.scrub, actions);
-            });
-        } else {
-            egui::CentralPanel::no_frame().frame(flat).show(ui, |ui| {
-                match &self.open {
-                    Some(o) if self.info => {
-                        channel_info(ui, o, find(&self.channels, &o.slug), actions)
-                    }
-                    Some(o) => {
-                        let image = avatar(&self.channels, &o.slug);
-                        tracklist(
-                            ui,
-                            o,
-                            image,
-                            &self.tracks,
-                            state,
-                            true,
-                            &mut self.scroll,
-                            self.keyed,
-                            actions,
-                        )
-                    }
-                    None => {
+        // What's under now playing is drawn only while it slides.
+        if !self.now || self.up.is_some() {
+            if wide {
+                let open = self.open.as_ref().map(|o| o.slug.as_str());
+                egui::Panel::left("channels")
+                    .frame(flat)
+                    .resizable(true)
+                    .default_size(240.0)
+                    .show(ui, |ui| {
                         channel_list(
                             ui,
                             &self.channels,
-                            None,
+                            open,
                             playing,
-                            true,
+                            false,
                             &mut self.channel_scroll,
-                            self.keyed,
+                            self.keyed && self.open.is_none(),
                             actions,
                         );
+                    });
+                egui::CentralPanel::no_frame().frame(flat).show(ui, |ui| {
+                    match &self.open {
+                        Some(o) if self.info => {
+                            channel_info(ui, o, find(&self.channels, &o.slug), actions)
+                        }
+                        Some(o) => {
+                            let image = avatar(&self.channels, &o.slug);
+                            tracklist(
+                                ui,
+                                o,
+                                image,
+                                &self.tracks,
+                                state,
+                                false,
+                                &mut self.scroll,
+                                self.keyed,
+                                actions,
+                            )
+                        }
+                        None => note(ui, "Pick a channel."),
                     }
-                }
-                dock(ui, state, face_of_playing, &mut self.scrub, actions);
-            });
+                    dock(ui, state, face_of_playing, &mut self.scrub, actions);
+                });
+            } else {
+                egui::CentralPanel::no_frame().frame(flat).show(ui, |ui| {
+                    let rect = ui.max_rect();
+                    let shown = self
+                        .side
+                        .map_or(if self.open.is_some() { 1.0 } else { 0.0 }, |s| s.shown());
+                    // Only the view being slid to answers clicks and keys.
+                    let mut ignored = Vec::new();
+                    if self.open.is_none() || self.side.is_some() {
+                        let at = rect.translate(snap(ui, vec2(-DRIFT * shown * rect.width(), 0.0)));
+                        let live = self.open.is_none();
+                        let acts = if live { &mut *actions } else { &mut ignored };
+                        ui.scope_builder(
+                            egui::UiBuilder::new().max_rect(at).id_salt("channels"),
+                            |ui| {
+                                ui.shrink_clip_rect(rect);
+                                channel_list(
+                                    ui,
+                                    &self.channels,
+                                    None,
+                                    playing,
+                                    true,
+                                    &mut self.channel_scroll,
+                                    self.keyed && live,
+                                    acts,
+                                );
+                            },
+                        );
+                    }
+                    if let Some(o) = self.open.as_ref().or(self.left.as_ref()) {
+                        let at = rect.translate(snap(ui, vec2((1.0 - shown) * rect.width(), 0.0)));
+                        let live = self.open.is_some();
+                        let acts = if live { &mut *actions } else { &mut ignored };
+                        ui.scope_builder(
+                            egui::UiBuilder::new().max_rect(at).id_salt("tracks"),
+                            |ui| {
+                                ui.shrink_clip_rect(rect);
+                                if shown < 1.0 {
+                                    ui.painter().rect_filled(at, 0.0, pal.bg);
+                                    ui.painter().vline(
+                                        at.left(),
+                                        at.y_range(),
+                                        egui::Stroke::new(1.0, pal.hairline),
+                                    );
+                                }
+                                if self.info && live {
+                                    channel_info(ui, o, find(&self.channels, &o.slug), acts)
+                                } else {
+                                    let image = avatar(&self.channels, &o.slug);
+                                    tracklist(
+                                        ui,
+                                        o,
+                                        image,
+                                        &self.tracks,
+                                        state,
+                                        true,
+                                        &mut self.scroll,
+                                        self.keyed && live,
+                                        acts,
+                                    )
+                                }
+                            },
+                        );
+                    }
+                    // The mini player stays put while the lists slide under it,
+                    // measured from the pane, which a view sliding off has stretched.
+                    ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
+                        dock(ui, state, face_of_playing, &mut self.scrub, actions)
+                    });
+                });
+            }
+        }
+        if self.now || self.up.is_some() {
+            let screen = ui.ctx().content_rect();
+            let shown = self.up.map_or(1.0, |s| s.shown());
+            let rect = screen.translate(snap(ui, vec2(0.0, (1.0 - shown) * screen.height())));
+            egui::Area::new(egui::Id::new("now"))
+                .order(egui::Order::Foreground)
+                .constrain(false)
+                .fixed_pos(rect.min)
+                .show(ui.ctx(), |ui| {
+                    ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
+                        ui.painter().rect_filled(rect, 0.0, pal.bg);
+                        if shown < 1.0 {
+                            ui.painter().hline(
+                                rect.x_range(),
+                                rect.top(),
+                                egui::Stroke::new(1.0, pal.hairline),
+                            );
+                        }
+                        // Clicks only count once it's coming up, not while it goes.
+                        let mut ignored = Vec::new();
+                        let acts = if self.now {
+                            &mut *actions
+                        } else {
+                            &mut ignored
+                        };
+                        now_playing(
+                            ui,
+                            state,
+                            face_of_playing,
+                            &mut self.scrub,
+                            self.volume,
+                            acts,
+                        );
+                        ui.expand_to_include_rect(rect);
+                    });
+                });
+        }
+
+        if self.side.is_some_and(|s| s.done()) {
+            self.side = None;
+            self.left = None;
+        }
+        if self.up.is_some_and(|s| s.done()) {
+            self.up = None;
+        }
+        if self.side.is_some() || self.up.is_some() {
+            ui.ctx().request_repaint();
         }
 
         for a in std::mem::take(&mut self.actions) {
@@ -560,22 +691,26 @@ impl App {
                     .or_insert_with(|| Tracks::fetch(ctx, &slug));
                 self.scroll.reveal =
                     (self.player.state.queue.as_deref() == Some(&slug)).then_some(Reveal::Jump);
+                if self.open.is_none() {
+                    self.side = Some(Slide::start(true, self.side));
+                }
                 self.open = Some(Open { slug, name });
                 self.info = false;
-                self.now = false;
+                self.show_now(false);
             }
             Action::Back => {
                 self.scrolling.stop();
                 if self.now {
-                    self.now = false;
+                    self.show_now(false);
                 } else if self.info {
                     self.info = false;
-                } else {
-                    self.open = None;
+                } else if self.open.is_some() {
+                    self.left = self.open.take();
+                    self.side = Some(Slide::start(false, self.side));
                 }
             }
             Action::Info => self.info = self.open.is_some() && !self.info,
-            Action::ShowNow => self.now = self.player.state.queue.is_some(),
+            Action::ShowNow => self.show_now(self.player.state.queue.is_some()),
             Action::Play(index) => {
                 self.scroll.cursor = index;
                 self.play(index);
@@ -617,6 +752,13 @@ impl App {
                 }
                 self.player.send(c);
             }
+        }
+    }
+
+    fn show_now(&mut self, now: bool) {
+        if now != self.now {
+            self.up = Some(Slide::start(now, self.up));
+            self.now = now;
         }
     }
 
@@ -853,7 +995,7 @@ fn now_playing(
     let pal = palette(ui);
     let rect = ui.max_rect();
     let cy = rect.top() + 2.0 * UNIT + KNOB / 2.0;
-    back(ui, pos2(rect.left() + 2.0 * UNIT + KNOB / 2.0, cy), actions);
+    close(ui, pos2(rect.left() + 2.0 * UNIT + KNOB / 2.0, cy), actions);
     speaker(ui, rect, s, volume, actions);
     // As much room under the buttons as the knobs leave above the group.
     let area = Rect::from_x_y_ranges(
@@ -1276,6 +1418,19 @@ fn back(ui: &mut Ui, c: Pos2, actions: &mut Vec<Action>) {
     }
 }
 
+/// Back's twin on now playing, which slides down rather than back: an X.
+fn close(ui: &mut Ui, c: Pos2, actions: &mut Vec<Action>) {
+    let pal = palette(ui);
+    let r = knob(ui, c, "back");
+    let stroke = egui::Stroke::new(1.5, pal.text);
+    for d in [vec2(4.0, 4.0), vec2(4.0, -4.0)] {
+        ui.painter().line_segment([c - d, c + d], stroke);
+    }
+    if r.on_hover_text("Close (esc)").clicked() {
+        actions.push(Action::Back);
+    }
+}
+
 /// The title in a pill centred on `c`, led by the avatar when there is one. Pressable, like the knobs.
 fn pill(ui: &mut Ui, c: Pos2, title: &str, image: Option<&str>, max: f32) -> Option<Response> {
     let pal = palette(ui);
@@ -1531,7 +1686,7 @@ fn rows(
     }
     if let Some(g) = sc.glide {
         let t = (g.at.elapsed().as_secs_f32() / GLIDE.as_secs_f32()).min(1.0);
-        let eased = 1.0 - (1.0 - t).powi(3);
+        let eased = ease(t);
         area = area.vertical_scroll_offset(g.from + (g.to - g.from) * eased);
         if t < 1.0 {
             ui.ctx().request_repaint();
@@ -1753,6 +1908,22 @@ fn clock(secs: f64) -> String {
 
 #[cfg(test)]
 mod tests {
+    use super::{SLIDE, Slide};
+    use std::time::Instant;
+
+    #[test]
+    fn turning_back_mid_slide_picks_up_where_it_was() {
+        let half = Slide {
+            at: Instant::now() - SLIDE / 2,
+            over: true,
+        };
+        let back = Slide::start(false, Some(half));
+        assert!((back.shown() - half.shown()).abs() < 0.01);
+        assert!(half.shown() > 0.5 && half.shown() < 1.0);
+        assert_eq!(Slide::start(true, None).shown().round(), 0.0);
+        assert_eq!(Slide::start(false, None).shown().round(), 1.0);
+    }
+
     #[test]
     fn clock_reads_like_a_player() {
         assert_eq!(super::clock(65.9), "1:05");
