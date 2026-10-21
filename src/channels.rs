@@ -2,9 +2,8 @@
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::collections::HashSet;
 
-const URL: &str = "https://oupgudlkspsmzkmeovlh.supabase.co/rest/v1/channels_with_tracks?select=slug,name,image,latest_track_at,track_count&order=latest_track_at.desc.nullslast,slug.asc&track_count=gt.0";
-/// Slugs of channels with at least one YouTube track, the only kind the app plays.
-const YOUTUBE_URL: &str = "https://oupgudlkspsmzkmeovlh.supabase.co/rest/v1/channels?select=slug,channel_track!inner(tracks!inner())&channel_track.tracks.provider=eq.youtube&channel_track.limit=1&order=slug.asc";
+const CHANNELS_URL: &str = "https://oupgudlkspsmzkmeovlh.supabase.co/rest/v1/channels_with_tracks?select=slug,name,image,latest_track_at,track_count&order=latest_track_at.desc.nullslast,slug.asc&track_count=gt.0";
+const YOUTUBE_CHANNELS_URL: &str = "https://oupgudlkspsmzkmeovlh.supabase.co/rest/v1/channels?select=slug,channel_track!inner(tracks!inner())&channel_track.tracks.provider=eq.youtube&channel_track.limit=1&order=slug.asc";
 /// Supabase caps a response at 1000 rows, so the list is paged.
 const PAGE_SIZE: usize = 1000;
 // The public anon key, the same one @radio4000/sdk ships.
@@ -27,33 +26,33 @@ pub fn avatar_url(image: &str, px: u32) -> String {
     )
 }
 
-/// Every channel with something to play: all pages, in latest-track order.
+/// Every channel with something to play, in latest-track order.
 pub fn fetch() -> Result<Vec<Channel>, String> {
-    let mut channels: Vec<Channel> = fetch_all(URL)?;
-    let youtube: Vec<Slug> = fetch_all(YOUTUBE_URL)?;
-    let youtube: HashSet<String> = youtube.into_iter().map(|s| s.slug).collect();
+    let mut channels: Vec<Channel> = fetch_all(CHANNELS_URL)?;
+    let youtube = youtube_slugs()?;
     channels.retain(|c| playable(c, &youtube));
     Ok(channels)
 }
 
-#[derive(Deserialize)]
-struct Slug {
-    slug: String,
+fn youtube_slugs() -> Result<HashSet<String>, String> {
+    #[derive(Deserialize)]
+    struct Row {
+        slug: String,
+    }
+    let rows: Vec<Row> = fetch_all(YOUTUBE_CHANNELS_URL)?;
+    Ok(rows.into_iter().map(|r| r.slug).collect())
 }
 
 fn fetch_all<T: DeserializeOwned>(url: &str) -> Result<Vec<T>, String> {
     let mut rows = Vec::new();
-    let mut offset = 0;
     loop {
-        let page: Vec<T> = fetch_page(url, offset)?;
-        let done = page.len() < PAGE_SIZE;
+        let page: Vec<T> = fetch_page(url, rows.len())?;
+        let last = page.len() < PAGE_SIZE;
         rows.extend(page);
-        if done {
-            break;
+        if last {
+            return Ok(rows);
         }
-        offset += PAGE_SIZE;
     }
-    Ok(rows)
 }
 
 fn fetch_page<T: DeserializeOwned>(url: &str, offset: usize) -> Result<Vec<T>, String> {
@@ -69,9 +68,7 @@ fn fetch_page<T: DeserializeOwned>(url: &str, offset: usize) -> Result<Vec<T>, S
     serde_json::from_str(&body).map_err(|e| e.to_string())
 }
 
-/// Whether the channel has anything to play. The query already drops empty
-/// channels, but track_count counts every provider and the tracklist keeps only
-/// YouTube, so a channel of links alone has to go too.
+/// track_count counts every provider, but only YouTube tracks play.
 fn playable(c: &Channel, youtube: &HashSet<String>) -> bool {
     c.track_count.is_some_and(|n| n > 0) && youtube.contains(&c.slug)
 }
@@ -103,9 +100,7 @@ mod tests {
             {"slug":"cognitivetherapy","name":"Links only","track_count":1}]"#,
         )
         .unwrap();
-        let youtube: Vec<Slug> =
-            serde_json::from_str(r#"[{"slug":"wavs"},{"slug":"zero"},{"slug":"null"}]"#).unwrap();
-        let youtube = youtube.into_iter().map(|s| s.slug).collect();
+        let youtube = ["wavs", "zero", "null"].map(String::from).into();
         let kept: Vec<_> = rows
             .iter()
             .filter(|c| playable(c, &youtube))
