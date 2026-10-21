@@ -780,6 +780,7 @@ fn shown(s: &State, scrub: &Option<Scrub>) -> f64 {
     scrub.as_ref().map_or(s.pos, |sc| sc.to)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn channel_list(
     ui: &mut Ui,
     channels: &Option<Result<Vec<Channel>, String>>,
