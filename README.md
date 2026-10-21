@@ -43,7 +43,7 @@ On Apple Silicon, tell the linker where Homebrew lives: `export LIBRARY_PATH="$(
 1. Download `mpv-dev-x86_64-*.7z` from [shinchiro's mpv builds](https://github.com/shinchiro/mpv-winbuild-cmake/releases) and unpack it to e.g. `C:\mpv-dev`.
 2. The MSVC toolchain wants `mpv.lib`. Newer builds ship no `mpv.def`, so in a Developer PowerShell write one from the DLL's exports, then build the lib:
    ```powershell
-   @('EXPORTS') + (dumpbin /exports libmpv-2.dll | Select-String '^\s+\d+\s+[0-9A-F]+\s+[0-9A-F]{8}\s+(\S+)' | % { $_.Matches[0].Groups[1].Value }) | Set-Content mpv.def
+   @('LIBRARY libmpv-2.dll', 'EXPORTS') + (dumpbin /exports libmpv-2.dll | Select-String '^\s+\d+\s+[0-9A-F]+\s+[0-9A-F]{8}\s+(\S+)' | % { $_.Matches[0].Groups[1].Value }) | Set-Content mpv.def
    lib /def:mpv.def /machine:x64 /out:mpv.lib
    ```
 3. Point the linker at it: `$env:LIB += ";C:\mpv-dev"`.

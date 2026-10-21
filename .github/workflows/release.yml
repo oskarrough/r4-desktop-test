@@ -55,7 +55,8 @@ jobs:
           # Newer builds ship no mpv.def, so list the DLL's exports ourselves.
           $exports = & "$bin\dumpbin.exe" /exports mpv-dev\libmpv-2.dll | Select-String '^\s+\d+\s+[0-9A-F]+\s+[0-9A-F]{8}\s+(\S+)' | ForEach-Object { $_.Matches[0].Groups[1].Value }
           if (-not $exports) { throw 'no exports found in libmpv-2.dll' }
-          @('EXPORTS') + $exports | Set-Content mpv-dev\mpv.def
+          # LIBRARY names the DLL the exe will load; without it lib.exe assumes mpv.dll.
+          @('LIBRARY libmpv-2.dll', 'EXPORTS') + $exports | Set-Content mpv-dev\mpv.def
           & "$bin\lib.exe" /def:mpv-dev\mpv.def /machine:x64 /out:mpv-dev\mpv.lib
           "LIB=$env:LIB;$PWD\mpv-dev" >> $env:GITHUB_ENV
 
@@ -69,6 +70,16 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: Compress-Archive -Path target\release\radio4000.exe, mpv-dev\libmpv-2.dll -DestinationPath ${{ matrix.asset }}
+
+      - name: Smoke test (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          # Run the exe from the unpacked zip with no args: usage exits 2, a missing DLL fails before main.
+          Expand-Archive ${{ matrix.asset }} -DestinationPath smoke
+          & smoke\radio4000.exe
+          if ($LASTEXITCODE -ne 2) { throw "radio4000.exe exited $LASTEXITCODE, expected 2 (usage)" }
+          $global:LASTEXITCODE = 0
 
       - uses: actions/upload-artifact@v7
         with:
