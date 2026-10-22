@@ -1,9 +1,9 @@
 #!/bin/sh
 # Install or update radio4000 from the latest release.
-#   curl -fsSL https://raw.githubusercontent.com/oskarrough/r4-desktop-test/main/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/radio4000/r4-desktop-test/main/install.sh | sh
 set -eu
 
-repo="oskarrough/r4-desktop-test"
+repo="radio4000/r4-desktop-test"
 bin_dir="${RADIO4000_BIN_DIR:-$HOME/.local/bin}"
 
 fail() {

@@ -9,18 +9,18 @@ Pick a channel, play its tracks. Audio goes through libmpv, which resolves YouTu
 Linux and macOS:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/oskarrough/r4-desktop-test/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/radio4000/r4-desktop-test/main/install.sh | sh
 ```
 
 Windows:
 
 ```powershell
-irm https://raw.githubusercontent.com/oskarrough/r4-desktop-test/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/radio4000/r4-desktop-test/main/install.ps1 | iex
 ```
 
 Radio4000 then opens from your app launcher, Applications on a Mac, or the Start Menu on Windows. Run the same line again to update.
 
-Linux downloads include everything needed to play on Ubuntu 24.04 or newer, and similar desktop systems. You can also download the [AppImage](https://github.com/oskarrough/r4-desktop-test/releases/download/latest/radio4000-x86_64.AppImage) directly.
+Linux downloads include everything needed to play on Ubuntu 24.04 or newer, and similar desktop systems. You can also download the [AppImage](https://github.com/radio4000/r4-desktop-test/releases/download/latest/radio4000-x86_64.AppImage) directly.
 
 ---
 

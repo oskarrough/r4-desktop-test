@@ -1,5 +1,5 @@
 # Install or update radio4000 from the latest release.
-#   irm https://raw.githubusercontent.com/oskarrough/r4-desktop-test/main/install.ps1 | iex
+#   irm https://raw.githubusercontent.com/radio4000/r4-desktop-test/main/install.ps1 | iex
 # Adds the install folder to your user PATH; set RADIO4000_NO_MODIFY_PATH=1 to skip that.
 # The script block keeps its variables and preferences out of the caller's session.
 & {
@@ -7,7 +7,7 @@
 	# The progress bar makes Invoke-WebRequest crawl on Windows PowerShell 5.1.
 	$ProgressPreference = 'SilentlyContinue'
 
-	$repo = 'oskarrough/r4-desktop-test'
+	$repo = 'radio4000/r4-desktop-test'
 	$binDir = if ($env:RADIO4000_BIN_DIR) { $env:RADIO4000_BIN_DIR } else { Join-Path $env:LOCALAPPDATA 'Programs\radio4000' }
 
 	# A 32-bit PowerShell on 64-bit Windows reports x86 here and the real machine in PROCESSOR_ARCHITEW6432.
