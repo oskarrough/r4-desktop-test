@@ -1,3 +1,5 @@
+> THIS IS A TEST. Learning how to make and release proper desktop apps for linux, macOS and Windows. 
+
 # Radio4000 desktop
 
 This is a native Radio4000 player for Linux, macOS and Windows.  
