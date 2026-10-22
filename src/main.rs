@@ -17,6 +17,12 @@ mod tracks;
 mod window;
 
 fn main() {
+    // WSLg's Wayland connection drops when the window is resized; X11 works.
+    #[cfg(target_os = "linux")]
+    if std::env::var_os("WSL_DISTRO_NAME").is_some() {
+        // SAFETY: first statement in main, no other threads yet.
+        unsafe { std::env::remove_var("WAYLAND_DISPLAY") };
+    }
     let url = std::env::args().nth(1);
     if matches!(url.as_deref(), Some("--version" | "-V")) {
         // Release builds bake in latest-<sha>; see .github/workflows/release.yml.
